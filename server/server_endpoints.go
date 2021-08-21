@@ -243,20 +243,13 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 		pd.Links = []HandlerLink{
 
 			{
-				URL:   "https://htmlpreview.github.io/?https://github.com/0xERR0R/blocky/blob/master/docs/swagger.html",
-				Title: "Swagger Rest API Documentation (Online @GitHub)",
+				URL:   "https://lab.sys-adm.in",
+				Title: "Sys-Admin Laboratory",
 			},
 			{
-				URL:   "/debug/",
-				Title: "Go Profiler",
+				URL:   "https://forum.sys-adm.in",
+				Title: "Sys-Admin Forum",
 			},
-		}
-
-		if cfg.Prometheus.Enable {
-			pd.Links = append(pd.Links, HandlerLink{
-				URL:   cfg.Prometheus.Path,
-				Title: "Prometheus endpoint",
-			})
 		}
 
 		err := t.Execute(writer, pd)
