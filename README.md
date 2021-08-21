@@ -73,3 +73,10 @@ at: [https://0xERR0R.github.io/blocky/](https://0xERR0R.github.io/blocky/)
 ## Contribution
 
 Issues, feature suggestions and pull requests are welcome!
+
+## Additional links
+
+* https://github.com/m0zgen/blocky-installer.git
+* https://github.com/m0zgen/prometheus-stack-installer.git
+* https://github.com/m0zgen/dns-hole.git
+* https://github.com/m0zgen/dns-tester.git
