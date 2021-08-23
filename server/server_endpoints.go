@@ -247,6 +247,10 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 				URL:   "https://forum.sys-adm.in",
 				Title: "Sys-Admin Forum",
 			},
+			{
+				URL:   "https://github.com/m0zgen/blocky-listener-daemon",
+				Title: "BLD Repo",
+			},
 		}
 
 		err := t.Execute(writer, pd)

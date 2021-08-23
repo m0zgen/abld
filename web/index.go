@@ -92,46 +92,27 @@ const IndexTmpl = `
           </div>
         </section>
 
-        <footer class="section has-background-light">
-          <div class="container">
-            <div class="pb-5 is-flex is-flex-wrap-wrap is-justify-content-between is-align-items-center">
-              <div class="mr-auto mb-2">
-                <a class="is-inline-block" href="https://lab.sys-adm.in" target="_blank">
-                  <img class="image" src="https://lab.sys-adm.in/images/lab.sys-adm.in-logo.png" alt="" width="96px">
-                </a>
-              </div>
-              <div>
-
-                <ul class="is-flex is-flex-wrap-wrap is-align-items-center is-justify-content-center">
-                {{range .Links}}
+        <footer class="section">
+        <div class="container pb-5 has-text-centered">
+          <a class="mx-auto mb-4 is-inline-block" href="https://lab.sys-adm.in" target="_blank">
+            <img class="image" src="https://lab.sys-adm.in/images/lab.sys-adm.in-logo.png" alt="" width="96px">
+          </a>
+          <ul class="mb-4 is-flex is-flex-wrap-wrap is-justify-content-center is-align-items-center">
+            {{range .Links}}
                   <li class="mr-4"><a class="button is-white" href="{{.URL}}" target="_blank">{{.Title}}</a></li>
-                {{end}}
-                </ul>
-
-                <!-- <ul class="is-flex is-flex-wrap-wrap is-align-items-center is-justify-content-center">
-                  <li class="mr-4"><a class="button is-white" href="#">Blocky repo</a></li>
-                  <li class="mr-4"><a class="button is-white" href="#">BLD repo</a></li>
-                </ul> -->
-              </div>
-            </div>
-          </div>
-          <div class="pt-5" style="border-top: 1px solid #dee2e6;"></div>
-          <div class="container">
-            <div class="is-flex-tablet is-justify-content-between is-align-items-center">
-              <p>BLD © 2021</p>
-              <div class="py-2 is-hidden-tablet"></div>
-              <div class="ml-auto">
-                <a class="mr-4 is-inline-block" href="#">
-                  <img src="bulma-plain-assets/socials/facebook.svg" alt="">
-                </a>
-                <a class="mr-4 is-inline-block" href="#">
-                  <img src="bulma-plain-assets/socials/github.svg" alt="">
-                </a>
-              </div>
-            </div>
-          </div>
+            {{end}}
+          </ul>
+          <!-- <div>
+            <a class="mr-4 is-inline-block" href="#">
+              <img src="bulma-plain-assets/socials/github.svg">
+            </a>
+          </div> -->
+        </div>
+        <div class="pt-5" style="border-top: 1px solid #dee2e6;"></div>
+        <div class="container">
+          <p class="has-text-centered">S-A BLD © 2021</p>
+        </div>
       </footer>
     </body>
-
   </html>
 `
