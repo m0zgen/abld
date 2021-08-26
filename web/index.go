@@ -42,7 +42,9 @@ const IndexTmpl = `
                   <span class="has-text-grey-dark">Focus on information for free</span>
                   <h2 class="mt-3 mb-5 is-size-2 is-size-3-mobile has-text-weight-bold">
                     Web without tracking, advertising, malware and etc with<br />
-                    Blocky Listener Daemon<br/>from Sys-Admin
+                    Blocky Listener Daemon<br/>
+<!--                    from <a href="https://sys-adm.in" target="_blank">Sys-Adm.in-->
+                  </a>
                   </h2>
                   <p class="subtitle">You can use BLD as:</p>
                   <p>DoH (in browsers):<code>https://bld.sys-adm.in:8443/dns-query</code></p>
@@ -86,6 +88,30 @@ const IndexTmpl = `
                 <div>
                   <h4 class="mb-2 is-size-5 has-text-weight-bold">Different servers locations</h4>
                   <p>Servers located on the different countries</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="columns is-multiline">
+              <div class="column is-5">
+                <div class="container has-text-right">
+                  <a class="mx-auto mb-4 is-inline-block" href="https://ko-fi.com/sysadminkz" target="_blank">
+                    <img class="image" src="https://cdn.blahdns.com/kofi4.png" alt="" width="196px">
+                  </a>
+
+                </div>
+              </div>
+              <div class="column is-2 is-vcentered">
+                <div class="container has-text-centered">
+                  <br>
+                  -OR-
+                </div>
+              </div>
+              <div class="column is-5">
+                <div class="container has-text-left">
+                  <a class="button  is-medium is-info mx-auto mb-4 is-inline-block" href="http://paypal.me/m0zgen" target="_blank">
+                    Donate with PayPal
+                  </a>
                 </div>
               </div>
             </div>
