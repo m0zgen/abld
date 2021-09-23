@@ -187,9 +187,31 @@ volumes:
       device: //NAS_HOSTNAME/blocky  
 ```
 
-## Run with helm chart on Kubernetes
+## Other installation types
+
+!!! warning
+
+    These projects are maintained by other people.
+
+### Run with helm chart on Kubernetes
 
 See [this repo](https://github.com/k8s-at-home/charts/tree/master/charts/stable/blocky)
 or [artifacthub](https://hub.helm.sh/charts/k8s-at-home/blocky) for details about running blocky via helm in kubernetes.
+
+### AUR package for Arch Linux
+
+See [https://aur.archlinux.org/packages/blocky/](https://aur.archlinux.org/packages/blocky/)
+
+### Package for Alpine Linux
+
+See [https://pkgs.alpinelinux.org/package/edge/testing/x86/blocky](https://pkgs.alpinelinux.org/package/edge/testing/x86/blocky)
+
+### Installation script for CentOS/Fedora
+
+See [https://github.com/m0zgen/blocky-installer](https://github.com/m0zgen/blocky-installer)
+
+### Package for FreeBSD
+
+See [https://www.freebsd.org/cgi/ports.cgi?query=blocky&stype=all](https://www.freebsd.org/cgi/ports.cgi?query=blocky&stype=all)
 
 --8<-- "docs/includes/abbreviations.md"
