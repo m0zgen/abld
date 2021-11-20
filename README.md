@@ -1,3 +1,7 @@
+# Blocky Listener Daemon (BLD)
+
+BLD is a DNS proxy and ad-blocker for the local network written in Go with following features.
+=======
 [![GitHub Workflow Status](https://img.shields.io/github/workflow/status/0xERR0R/blocky/CI%20Build?label=CI%20Build "CI Build")](#)
 [![GitHub Workflow Status](https://img.shields.io/github/workflow/status/0xERR0R/blocky/Release?label=Release "Release")](#)
 [![GitHub latest version](https://img.shields.io/github/v/release/0xERR0R/blocky "Latest version")](https://github.com/0xERR0R/blocky/releases)
@@ -11,13 +15,7 @@
 [![Total alerts](https://img.shields.io/lgtm/alerts/g/0xERR0R/blocky.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/0xERR0R/blocky/alerts/)
 [![Donation](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-blueviolet.svg)](https://ko-fi.com/0xerr0r)
 
-<p align="center">
-  <img height="200" src="https://github.com/0xERR0R/blocky/blob/master/docs/blocky.svg">
-</p>
-
-# Blocky
-
-Blocky is a DNS proxy and ad-blocker for the local network written in Go with following features:
+Based on [Blocky](https://github.com/0xERR0R/blocky).
 
 ## Features
 
@@ -87,8 +85,10 @@ You can jump to [Installation](https://0xerr0r.github.io/blocky/installation/) c
 You can find full documentation and configuration examples
 at: [https://0xERR0R.github.io/blocky/](https://0xERR0R.github.io/blocky/)
 
-## Contribution
+## Additional links
 
-Issues, feature suggestions and pull requests are welcome!
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G2G25XZQG)
+* https://github.com/m0zgen/blocky-installer.git
+* https://github.com/m0zgen/prometheus-stack-installer.git
+* https://github.com/m0zgen/dns-hole.git
+* https://github.com/m0zgen/dns-tester.git
+* https://lab.sys-adm.in

@@ -18,7 +18,6 @@ import (
 	"github.com/0xERR0R/blocky/web"
 
 	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/cors"
 	"github.com/miekg/dns"
 )
@@ -214,8 +213,6 @@ func createRouter(cfg *config.Config) *chi.Mux {
 
 	configureCorsHandler(router)
 
-	configureDebugHandler(router)
-
 	configureRootHandler(cfg, router)
 
 	return router
@@ -251,6 +248,10 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 				URL:   "https://forum.sys-adm.in",
 				Title: "Sys-Admin Forum",
 			},
+			{
+				URL:   "https://github.com/m0zgen/blocky-listener-daemon",
+				Title: "BLD Repo",
+			},
 		}
 
 		err := t.Execute(writer, pd)
@@ -259,10 +260,6 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 			writer.WriteHeader(http.StatusInternalServerError)
 		}
 	})
-}
-
-func configureDebugHandler(router *chi.Mux) {
-	router.Mount("/debug", middleware.Profiler())
 }
 
 func configureCorsHandler(router *chi.Mux) {
