@@ -11,7 +11,7 @@ BIN_OUT_DIR=bin
 
 export PATH=$(shell go env GOPATH)/bin:$(shell echo $$PATH)
 
-all: test lint build ## Build binary (with tests)
+all: build test lint ## Build binary (with tests)
 
 clean: ## cleans output directory
 	$(shell rm -rf $(BIN_OUT_DIR)/*)
@@ -35,7 +35,7 @@ test:  ## run tests
 	go test -v -coverprofile=coverage.txt -covermode=atomic -cover ./...
 
 lint: build ## run golangcli-lint checks
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.42.1
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.43.0
 	$(shell go env GOPATH)/bin/golangci-lint run
 
 run: build ## Build and run binary

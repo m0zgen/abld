@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hako/durafmt"
+
 	"github.com/0xERR0R/blocky/config"
 	"github.com/0xERR0R/blocky/evt"
 	"github.com/0xERR0R/blocky/model"
@@ -19,6 +21,7 @@ import (
 type CachingResolver struct {
 	NextResolver
 	minCacheTimeSec, maxCacheTimeSec int
+	cacheTimeNegative                time.Duration
 	resultCache                      *cache.Cache
 	prefetchExpires                  time.Duration
 	prefetchThreshold                int
@@ -31,18 +34,13 @@ type cacheValue struct {
 	prefetch bool
 }
 
-const (
-	cacheTimeNegative              = 30 * time.Minute
-	prefetchingNameCacheExpiration = 2 * time.Hour
-	prefetchingNameCountThreshold  = 5
-)
-
 // NewCachingResolver creates a new resolver instance
 func NewCachingResolver(cfg config.CachingConfig) ChainedResolver {
 	c := &CachingResolver{
-		minCacheTimeSec: int(time.Duration(cfg.MinCachingTime).Seconds()),
-		maxCacheTimeSec: int(time.Duration(cfg.MaxCachingTime).Seconds()),
-		resultCache:     createQueryResultCache(&cfg),
+		minCacheTimeSec:   int(time.Duration(cfg.MinCachingTime).Seconds()),
+		maxCacheTimeSec:   int(time.Duration(cfg.MaxCachingTime).Seconds()),
+		cacheTimeNegative: time.Duration(cfg.CacheTimeNegative),
+		resultCache:       createQueryResultCache(&cfg),
 	}
 
 	if cfg.Prefetching {
@@ -57,15 +55,9 @@ func createQueryResultCache(cfg *config.CachingConfig) *cache.Cache {
 }
 
 func configurePrefetching(c *CachingResolver, cfg *config.CachingConfig) {
-	c.prefetchExpires = prefetchingNameCacheExpiration
-	if cfg.PrefetchExpires > 0 {
-		c.prefetchExpires = time.Duration(cfg.PrefetchExpires)
-	}
+	c.prefetchExpires = time.Duration(cfg.PrefetchExpires)
 
-	c.prefetchThreshold = prefetchingNameCountThreshold
-	if cfg.PrefetchThreshold > 0 {
-		c.prefetchThreshold = cfg.PrefetchThreshold
-	}
+	c.prefetchThreshold = cfg.PrefetchThreshold
 
 	c.prefetchingNameCache = cache.NewWithLRU(c.prefetchExpires, time.Minute, cfg.PrefetchMaxItemsCount)
 
@@ -74,15 +66,18 @@ func configurePrefetching(c *CachingResolver, cfg *config.CachingConfig) {
 	})
 }
 
+// check if domain was queried > threshold in the time window
+func (r *CachingResolver) isPrefetchingDomain(cacheKey string) bool {
+	cnt, found := r.prefetchingNameCache.Get(cacheKey)
+	return found && cnt.(int) > r.prefetchThreshold
+}
+
 // onEvicted is called if a DNS response in the cache is expired and was removed from cache
 func (r *CachingResolver) onEvicted(cacheKey string) {
 	qType, domainName := util.ExtractCacheKey(cacheKey)
 	logger := logger("caching_resolver")
 
-	cnt, found := r.prefetchingNameCache.Get(cacheKey)
-
-	// check if domain was queried > threshold in the time window
-	if found && cnt.(int) > r.prefetchThreshold {
+	if r.isPrefetchingDomain(cacheKey) {
 		logger.Debugf("prefetching '%s' (%s)", util.Obfuscate(domainName), dns.TypeToString[qType])
 
 		req := newRequest(fmt.Sprintf("%s.", domainName), qType, logger)
@@ -109,16 +104,27 @@ func (r *CachingResolver) Configuration() (result []string) {
 
 	result = append(result, fmt.Sprintf("maxCacheTimeSec = %d", r.maxCacheTimeSec))
 
+	result = append(result, fmt.Sprintf("cacheTimeNegative = %s", durafmt.Parse(r.cacheTimeNegative)))
+
 	result = append(result, fmt.Sprintf("prefetching = %t", r.prefetchingNameCache != nil))
 
 	if r.prefetchingNameCache != nil {
-		result = append(result, fmt.Sprintf("prefetchExpires = %s", r.prefetchExpires))
+		result = append(result, fmt.Sprintf("prefetchExpires = %s", durafmt.Parse(r.prefetchExpires)))
+
 		result = append(result, fmt.Sprintf("prefetchThreshold = %d", r.prefetchThreshold))
 	}
 
 	result = append(result, fmt.Sprintf("cache items count = %d", r.resultCache.ItemCount()))
 
 	return
+}
+
+func calculateRemainingTTL(expiresAt time.Time) uint32 {
+	if expiresAt.IsZero() {
+		return 0
+	}
+
+	return uint32(time.Until(expiresAt).Seconds())
 }
 
 // Resolve checks if the current query result is already in the cache and returns it
@@ -142,7 +148,8 @@ func (r *CachingResolver) Resolve(request *model.Request) (response *model.Respo
 
 		r.trackQueryDomainNameCount(domain, cacheKey, logger)
 
-		val, expiresAt, found := r.resultCache.GetWithExpiration(cacheKey)
+		// can return expired items (if cache cleanup is not executed yet)
+		val, expiresAt, found := r.resultCache.GetRaw(cacheKey)
 
 		if found {
 			logger.Debug("domain is cached")
@@ -150,7 +157,7 @@ func (r *CachingResolver) Resolve(request *model.Request) (response *model.Respo
 			evt.Bus().Publish(evt.CachingResultCacheHit, domain)
 
 			// calculate remaining TTL
-			remainingTTL := uint32(time.Until(expiresAt).Seconds())
+			remainingTTL := calculateRemainingTTL(expiresAt)
 
 			v, ok := val.(cacheValue)
 			if ok {
@@ -207,8 +214,10 @@ func (r *CachingResolver) putInCache(cacheKey string, response *model.Response, 
 		// put value into cache
 		r.resultCache.Set(cacheKey, cacheValue{answer, prefetch}, time.Duration(r.adjustTTLs(answer))*time.Second)
 	} else if response.Res.Rcode == dns.RcodeNameError {
-		// put return code if NXDOMAIN
-		r.resultCache.Set(cacheKey, response.Res.Rcode, cacheTimeNegative)
+		if r.cacheTimeNegative > 0 {
+			// put return code if NXDOMAIN
+			r.resultCache.Set(cacheKey, response.Res.Rcode, r.cacheTimeNegative)
+		}
 	}
 
 	evt.Bus().Publish(evt.CachingResultCacheChanged, r.resultCache.ItemCount())

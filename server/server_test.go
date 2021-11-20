@@ -92,6 +92,8 @@ var _ = Describe("Running DNS server", func() {
 					"clAdsAndYoutube": {"ads", "youtube"},
 					"clYoutubeOnly":   {"youtube"},
 				},
+				BlockType: "zeroIp",
+				BlockTTL:  config.Duration(6 * time.Hour),
 			},
 			Upstream: config.UpstreamConfig{
 				ExternalResolvers: map[string][]config.Upstream{"default": {upstreamGoogle}},
@@ -100,8 +102,12 @@ var _ = Describe("Running DNS server", func() {
 				Upstream: upstreamClient,
 			},
 
-			Port:     "55555",
-			HTTPPort: "4000",
+			Port:      "55555",
+			TLSPort:   "8853",
+			CertFile:  "../testdata/cert.pem",
+			KeyFile:   "../testdata/key.pem",
+			HTTPPort:  "4000",
+			HTTPSPort: "4443",
 			Prometheus: config.PrometheusConfig{
 				Enable: true,
 				Path:   "/metrics",
@@ -425,6 +431,25 @@ var _ = Describe("Running DNS server", func() {
 
 					Expect(msg.Answer).Should(BeDNSRecord("www.example.com.", dns.TypeA, 0, "123.124.122.122"))
 				})
+				It("should get a valid response, clientId is passed", func() {
+					msg := util.NewMsgWithQuestion("www.example.com.", dns.TypeA)
+					rawDNSMessage, err := msg.Pack()
+					Expect(err).Should(Succeed())
+
+					resp, err := http.Post("http://localhost:4000/dns-query/client123",
+						"application/dns-message", bytes.NewReader(rawDNSMessage))
+					Expect(err).Should(Succeed())
+					defer resp.Body.Close()
+					Expect(resp).Should(HaveHTTPStatus(http.StatusOK))
+					rawMsg, err := ioutil.ReadAll(resp.Body)
+					Expect(err).Should(Succeed())
+
+					msg = new(dns.Msg)
+					err = msg.Unpack(rawMsg)
+					Expect(err).Should(Succeed())
+
+					Expect(msg.Answer).Should(BeDNSRecord("www.example.com.", dns.TypeA, 0, "123.124.122.122"))
+				})
 			})
 			When("POST payload exceeds 512 bytes", func() {
 				It("should return 'Payload Too Large'", func() {
@@ -483,7 +508,8 @@ var _ = Describe("Running DNS server", func() {
 								"lan.home":   {net.ParseIP("192.168.178.56")},
 							},
 						}},
-					Port: ":55556",
+					Blocking: config.BlockingConfig{BlockType: "zeroIp"},
+					Port:     ":55556",
 				})
 
 				Expect(err).Should(Succeed())
@@ -529,8 +555,8 @@ var _ = Describe("Running DNS server", func() {
 								"lan.home":   {net.ParseIP("192.168.178.56")},
 							},
 						}},
-
-					Port: "127.0.0.1:55557",
+					Blocking: config.BlockingConfig{BlockType: "zeroIp"},
+					Port:     "127.0.0.1:55557",
 				})
 
 				Expect(err).Should(Succeed())
