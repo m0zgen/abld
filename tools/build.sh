@@ -8,6 +8,9 @@ SCRIPT_PATH=$(cd `dirname "${BASH_SOURCE[0]}"` && pwd)
 
 DEST="/opt/blocky/"
 
+BUILD_PATH="$SCRIPT_PATH/builds"
+BINARY_NAME="blocky"
+
 # Build
 cd $SCRIPT_PATH; cd ..
 
@@ -23,13 +26,27 @@ usage() {
 
 }
 
+timestamp() {
+    echo `date +%d-%m-%Y_%H-%M-%S`
+}
+
+backupBinary() {
+    if [[ -f "$BUILD_PATH/$BINARY_NAME" ]]; then
+        bkp_name="blocky-$(timestamp)"
+        tar -zcvf $bkp_name.tar.gz $BUILD_PATH/$BINARY_NAME
+        mv $bkp_name.tar.gz $BUILD_PATH/prev/
+    fi
+}
+
 buildBLD() {
+
+    backupBinary
 
     if [[ ! -d $SCRIPT_PATH/builds ]]; then
         mkdir $SCRIPT_PATH/builds
     fi
 
-    env GOOS=linux GOARCH=amd64 go build -o $SCRIPT_PATH/builds
+    env GOOS=linux GOARCH=amd64 go build -o $BUILD_PATH
 }
 
 deployBLD() {
