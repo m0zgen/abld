@@ -40,6 +40,7 @@ backupBinary() {
 
 buildBLD() {
 
+    echo "Building BLD release.. to $BUILD_PATH"
     backupBinary
 
     if [[ ! -d $SCRIPT_PATH/builds ]]; then
@@ -51,7 +52,7 @@ buildBLD() {
 
 deployBLD() {
 
-    buildBLD
+    # buildBLD
 
     echo "Process deployment to server: $1 .."
 
@@ -90,6 +91,7 @@ if [[ "$DEPLOY" -eq "1" ]]; then
         if [[ -z "$USER" ]]; then
             usage
         else
+            buildBLD
             for srv in $TARGETS; do
                 deployBLD $srv $USERNAME
             done

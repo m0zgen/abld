@@ -85,7 +85,7 @@ You can jump to [Installation](https://0xerr0r.github.io/blocky/installation/) c
 You can find full documentation and configuration examples
 at: [https://0xERR0R.github.io/blocky/](https://0xERR0R.github.io/blocky/)
 
-## Blocking domain issues
+## Blocking domain / web-sources issues
 
 You can inform me about of accidents blocked / unblocked domains through [DNS-HOLE](https://github.com/m0zgen/dns-hole.git) repo.
 
