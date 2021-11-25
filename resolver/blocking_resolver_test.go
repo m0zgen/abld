@@ -52,7 +52,10 @@ badcnamedomain.com`)
 	BeforeEach(func() {
 		expectedReturnCode = dns.RcodeSuccess
 
-		sutConfig = config.BlockingConfig{}
+		sutConfig = config.BlockingConfig{
+			BlockType: "ZEROIP",
+			BlockTTL:  config.Duration(time.Minute),
+		}
 
 		mockAnswer = new(dns.Msg)
 	})
@@ -60,7 +63,8 @@ badcnamedomain.com`)
 	JustBeforeEach(func() {
 		m = &resolverMock{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: mockAnswer}, nil)
-		sut = NewBlockingResolver(sutConfig).(*BlockingResolver)
+		tmp, _ := NewBlockingResolver(sutConfig)
+		sut = tmp.(*BlockingResolver)
 		sut.Next(m)
 		sut.RefreshLists()
 	})
@@ -75,6 +79,8 @@ badcnamedomain.com`)
 	Describe("Events", func() {
 		BeforeEach(func() {
 			sutConfig = config.BlockingConfig{
+				BlockType: "ZEROIP",
+				BlockTTL:  config.Duration(time.Minute),
 				BlackLists: map[string][]string{
 					"gr1": {group1File.Name()},
 					"gr2": {group2File.Name()},
@@ -90,7 +96,8 @@ badcnamedomain.com`)
 				Expect(err).Should(Succeed())
 
 				// recreate to trigger a reload
-				sut = NewBlockingResolver(sutConfig).(*BlockingResolver)
+				tmp, _ := NewBlockingResolver(sutConfig)
+				sut = tmp.(*BlockingResolver)
 
 				time.Sleep(time.Second)
 
@@ -104,18 +111,21 @@ badcnamedomain.com`)
 		var rType ResponseType
 		BeforeEach(func() {
 			sutConfig = config.BlockingConfig{
+				BlockTTL: config.Duration(6 * time.Hour),
 				BlackLists: map[string][]string{
 					"gr1":          {group1File.Name()},
 					"gr2":          {group2File.Name()},
 					"defaultGroup": {defaultGroupFile.Name()},
 				},
 				ClientGroupsBlock: map[string][]string{
-					"client1":        {"gr1"},
-					"192.168.178.55": {"gr1"},
-					"altName":        {"gr2"},
-					"10.43.8.67/28":  {"gr1"},
-					"wildcard[0-9]*": {"gr1"},
-					"default":        {"defaultGroup"},
+					"client1":         {"gr1"},
+					"client2,client3": {"gr1"},
+					"client3":         {"gr2"},
+					"192.168.178.55":  {"gr1"},
+					"altName":         {"gr2"},
+					"10.43.8.67/28":   {"gr1"},
+					"wildcard[0-9]*":  {"gr1"},
+					"default":         {"defaultGroup"},
 				},
 				BlockType: "ZeroIP",
 			}
@@ -126,10 +136,25 @@ badcnamedomain.com`)
 		})
 
 		When("client name is defined in client groups block", func() {
-			It("should block the A query if domain is on the black list", func() {
+			It("should block the A query if domain is on the black list (single)", func() {
 				resp, err = sut.Resolve(newRequestWithClient("domain1.com.", dns.TypeA, "1.2.1.2", "client1"))
 
 				Expect(resp.Res.Answer).Should(BeDNSRecord("domain1.com.", dns.TypeA, 21600, "0.0.0.0"))
+			})
+			It("should block the A query if domain is on the black list (multipart 1)", func() {
+				resp, err = sut.Resolve(newRequestWithClient("domain1.com.", dns.TypeA, "1.2.1.2", "client2"))
+
+				Expect(resp.Res.Answer).Should(BeDNSRecord("domain1.com.", dns.TypeA, 21600, "0.0.0.0"))
+			})
+			It("should block the A query if domain is on the black list (multipart 2)", func() {
+				resp, err = sut.Resolve(newRequestWithClient("domain1.com.", dns.TypeA, "1.2.1.2", "client3"))
+
+				Expect(resp.Res.Answer).Should(BeDNSRecord("domain1.com.", dns.TypeA, 21600, "0.0.0.0"))
+			})
+			It("should block the A query if domain is on the black list (merged)", func() {
+				resp, err = sut.Resolve(newRequestWithClient("blocked2.com.", dns.TypeA, "1.2.1.2", "client3"))
+
+				Expect(resp.Res.Answer).Should(BeDNSRecord("blocked2.com.", dns.TypeA, 21600, "0.0.0.0"))
 			})
 			It("should block the AAAA query if domain is on the black list", func() {
 				resp, err = sut.Resolve(newRequestWithClient("domain1.com.", dns.TypeAAAA, "1.2.1.2", "client1"))
@@ -225,6 +250,7 @@ badcnamedomain.com`)
 		When("BlockType is NxDomain", func() {
 			BeforeEach(func() {
 				sutConfig = config.BlockingConfig{
+					BlockTTL: config.Duration(time.Minute),
 					BlackLists: map[string][]string{
 						"defaultGroup": {defaultGroupFile.Name()},
 					},
@@ -249,6 +275,7 @@ badcnamedomain.com`)
 		When("BlockTTL is set", func() {
 			BeforeEach(func() {
 				sutConfig = config.BlockingConfig{
+					BlockType: "ZEROIP",
 					BlackLists: map[string][]string{
 						"defaultGroup": {defaultGroupFile.Name()},
 					},
@@ -283,6 +310,7 @@ badcnamedomain.com`)
 		When("BlockType is custom IP", func() {
 			BeforeEach(func() {
 				sutConfig = config.BlockingConfig{
+					BlockTTL: config.Duration(6 * time.Hour),
 					BlackLists: map[string][]string{
 						"defaultGroup": {defaultGroupFile.Name()},
 					},
@@ -318,6 +346,7 @@ badcnamedomain.com`)
 						"default": {"defaultGroup"},
 					},
 					BlockType: "12.12.12.12",
+					BlockTTL:  config.Duration(6 * time.Hour),
 				}
 			})
 
@@ -376,6 +405,8 @@ badcnamedomain.com`)
 		When("Requested domain is on black and white list", func() {
 			BeforeEach(func() {
 				sutConfig = config.BlockingConfig{
+					BlockType:  "ZEROIP",
+					BlockTTL:   config.Duration(time.Minute),
 					BlackLists: map[string][]string{"gr1": {group1File.Name()}},
 					WhiteLists: map[string][]string{"gr1": {group1File.Name()}},
 					ClientGroupsBlock: map[string][]string{
@@ -394,6 +425,8 @@ badcnamedomain.com`)
 		When("Only whitelist is defined", func() {
 			BeforeEach(func() {
 				sutConfig = config.BlockingConfig{
+					BlockType: "zeroIP",
+					BlockTTL:  config.Duration(60 * time.Second),
 					WhiteLists: map[string][]string{
 						"gr1": {group1File.Name()},
 						"gr2": {group2File.Name()},
@@ -454,6 +487,8 @@ badcnamedomain.com`)
 		When("IP address is on black and white list", func() {
 			BeforeEach(func() {
 				sutConfig = config.BlockingConfig{
+					BlockType:  "ZEROIP",
+					BlockTTL:   config.Duration(time.Minute),
 					BlackLists: map[string][]string{"gr1": {group1File.Name()}},
 					WhiteLists: map[string][]string{"gr1": {defaultGroupFile.Name()}},
 					ClientGroupsBlock: map[string][]string{
@@ -474,6 +509,8 @@ badcnamedomain.com`)
 	Describe("Delegate request to next resolver", func() {
 		BeforeEach(func() {
 			sutConfig = config.BlockingConfig{
+				BlockType:  "ZEROIP",
+				BlockTTL:   config.Duration(time.Minute),
 				BlackLists: map[string][]string{"gr1": {group1File.Name()}},
 				ClientGroupsBlock: map[string][]string{
 					"default": {"gr1"},
@@ -493,7 +530,10 @@ badcnamedomain.com`)
 		})
 		When("no lists defined", func() {
 			BeforeEach(func() {
-				sutConfig = config.BlockingConfig{}
+				sutConfig = config.BlockingConfig{
+					BlockType: "ZEROIP",
+					BlockTTL:  config.Duration(time.Minute),
+				}
 			})
 			It("should delegate to next resolver", func() {
 				resp, err = sut.Resolve(newRequestWithClient("example.com.", dns.TypeA, "1.2.1.2", "unknown"))
@@ -737,6 +777,8 @@ badcnamedomain.com`)
 		When("resolver is enabled", func() {
 			BeforeEach(func() {
 				sutConfig = config.BlockingConfig{
+					BlockType:  "ZEROIP",
+					BlockTTL:   config.Duration(time.Minute),
 					BlackLists: map[string][]string{"gr1": {group1File.Name()}},
 					ClientGroupsBlock: map[string][]string{
 						"default": {"gr1"},
@@ -769,11 +811,23 @@ badcnamedomain.com`)
 
 				Log().ExitFunc = func(int) { fatal = true }
 
-				_ = NewBlockingResolver(config.BlockingConfig{
+				_, _ = NewBlockingResolver(config.BlockingConfig{
 					BlockType: "wrong",
 				})
 
 				Expect(fatal).Should(BeTrue())
+			})
+		})
+		When("failStartOnListError is active", func() {
+
+			It("should fail if lists can't be downloaded", func() {
+				_, err := NewBlockingResolver(config.BlockingConfig{
+					BlackLists:           map[string][]string{"gr1": {"wrongPath"}},
+					WhiteLists:           map[string][]string{"whitelist": {"wrongPath"}},
+					FailStartOnListError: true,
+					BlockType:            "zeroIp",
+				})
+				Expect(err).Should(HaveOccurred())
 			})
 		})
 	})

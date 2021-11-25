@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-multierror"
+
 	"github.com/0xERR0R/blocky/api"
 	"github.com/0xERR0R/blocky/config"
 	"github.com/0xERR0R/blocky/evt"
@@ -20,15 +22,15 @@ import (
 )
 
 func createBlockHandler(cfg config.BlockingConfig) blockHandler {
-	cfgBlockType := blockTypeFromConfig(cfg)
+	cfgBlockType := cfg.BlockType
 
-	if cfgBlockType == "NXDOMAIN" {
+	if strings.EqualFold(cfgBlockType, "NXDOMAIN") {
 		return nxDomainBlockHandler{}
 	}
 
-	blockTime := blockTTLFromConfig(cfg)
+	blockTime := uint32(time.Duration(cfg.BlockTTL).Seconds())
 
-	if cfgBlockType == "ZEROIP" {
+	if strings.EqualFold(cfgBlockType, "ZEROIP") {
 		return zeroIPBlockHandler{
 			BlockTimeSec: blockTime,
 		}
@@ -77,16 +79,46 @@ type BlockingResolver struct {
 	blockHandler        blockHandler
 	whitelistOnlyGroups map[string]bool
 	status              *status
+	clientGroupsBlock   map[string][]string
 }
 
 // NewBlockingResolver returns a new configured instance of the resolver
-func NewBlockingResolver(cfg config.BlockingConfig) ChainedResolver {
+func NewBlockingResolver(cfg config.BlockingConfig) (ChainedResolver, error) {
 	blockHandler := createBlockHandler(cfg)
 	refreshPeriod := time.Duration(cfg.RefreshPeriod)
 	timeout := time.Duration(cfg.DownloadTimeout)
-	blacklistMatcher := lists.NewListCache(lists.ListCacheTypeBlacklist, cfg.BlackLists, refreshPeriod, timeout)
-	whitelistMatcher := lists.NewListCache(lists.ListCacheTypeWhitelist, cfg.WhiteLists, refreshPeriod, timeout)
+	cooldown := time.Duration(cfg.DownloadCooldown)
+	blacklistMatcher, blErr := lists.NewListCache(lists.ListCacheTypeBlacklist, cfg.BlackLists, refreshPeriod,
+		timeout, cfg.DownloadAttempts, cooldown)
+	whitelistMatcher, wlErr := lists.NewListCache(lists.ListCacheTypeWhitelist, cfg.WhiteLists, refreshPeriod,
+		timeout, cfg.DownloadAttempts, cooldown)
 	whitelistOnlyGroups := determineWhitelistOnlyGroups(&cfg)
+
+	var err error
+	if blErr != nil {
+		err = multierror.Append(err, blErr)
+	}
+
+	if wlErr != nil {
+		err = multierror.Append(err, wlErr)
+	}
+
+	if err != nil && cfg.FailStartOnListError {
+		return nil, multierror.Prefix(err, "blocking resolver: ")
+	}
+
+	cgb := make(map[string][]string)
+
+	for identifier, cfgGroups := range cfg.ClientGroupsBlock {
+		for _, ipart := range strings.Split(identifier, ",") {
+			existingGroups, found := cgb[ipart]
+			if found {
+				cgb[ipart] = append(existingGroups, cfgGroups...)
+			} else {
+				cgb[ipart] = cfgGroups
+			}
+		}
+	}
 
 	res := &BlockingResolver{
 		blockHandler:        blockHandler,
@@ -98,9 +130,10 @@ func NewBlockingResolver(cfg config.BlockingConfig) ChainedResolver {
 			enabled:     true,
 			enableTimer: time.NewTimer(0),
 		},
+		clientGroupsBlock: cgb,
 	}
 
-	return res
+	return res, nil
 }
 
 // RefreshLists triggers the refresh of all black and white lists in the cache
@@ -224,13 +257,16 @@ func (r *BlockingResolver) Configuration() (result []string) {
 			result = append(result, fmt.Sprintf("  %s = \"%s\"", key, strings.Join(val, ";")))
 		}
 
-		blockType := blockTypeFromConfig(r.cfg)
+		blockType := r.cfg.BlockType
 		result = append(result, fmt.Sprintf("blockType = \"%s\"", blockType))
 
 		if blockType != "NXDOMAIN" {
-			blockTime := blockTTLFromConfig(r.cfg)
-			result = append(result, fmt.Sprintf("blockTTL = %d", blockTime))
+			result = append(result, fmt.Sprintf("blockTTL = %s", r.cfg.BlockTTL.String()))
 		}
+
+		result = append(result, fmt.Sprintf("downloadTimeout = %s", r.cfg.DownloadTimeout.String()))
+
+		result = append(result, fmt.Sprintf("FailStartOnListError = %t", r.cfg.FailStartOnListError))
 
 		result = append(result, "blacklist:")
 		for _, c := range r.blacklistMatcher.Configuration() {
@@ -245,7 +281,7 @@ func (r *BlockingResolver) Configuration() (result []string) {
 		result = []string{"deactivated"}
 	}
 
-	return
+	return result
 }
 
 func (r *BlockingResolver) hasWhiteListOnlyAllowed(groupsToCheck []string) bool {
@@ -347,7 +383,7 @@ func (r *BlockingResolver) groupsToCheckForClient(request *model.Request) []stri
 	var groups []string
 	// try client names
 	for _, cName := range request.ClientNames {
-		for blockGroup, groupsByName := range r.cfg.ClientGroupsBlock {
+		for blockGroup, groupsByName := range r.clientGroupsBlock {
 			if util.ClientNameMatchesGroupName(blockGroup, cName) {
 				groups = append(groups, groupsByName...)
 			}
@@ -355,14 +391,14 @@ func (r *BlockingResolver) groupsToCheckForClient(request *model.Request) []stri
 	}
 
 	// try IP
-	groupsByIP, found := r.cfg.ClientGroupsBlock[request.ClientIP.String()]
+	groupsByIP, found := r.clientGroupsBlock[request.ClientIP.String()]
 
 	if found {
 		groups = append(groups, groupsByIP...)
 	}
 
 	// try CIDR
-	for cidr, groupsByCidr := range r.cfg.ClientGroupsBlock {
+	for cidr, groupsByCidr := range r.clientGroupsBlock {
 		if util.CidrContainsIP(cidr, request.ClientIP) {
 			groups = append(groups, groupsByCidr...)
 		}
@@ -370,7 +406,7 @@ func (r *BlockingResolver) groupsToCheckForClient(request *model.Request) []stri
 
 	if len(groups) == 0 {
 		// return default
-		groups = r.cfg.ClientGroupsBlock["default"]
+		groups = r.clientGroupsBlock["default"]
 	}
 
 	var result []string
@@ -397,9 +433,6 @@ func (r *BlockingResolver) matches(groupsToCheck []string, m lists.Matcher,
 
 	return false, ""
 }
-
-const defaultBlockTTL = 6 * 60 * 60
-const defaultBlockType = "ZEROIP"
 
 type blockHandler interface {
 	handleBlock(question dns.Question, response *dns.Msg)
@@ -453,20 +486,4 @@ func (b ipBlockHandler) handleBlock(question dns.Question, response *dns.Msg) {
 		// use fallback
 		b.fallbackHandler.handleBlock(question, response)
 	}
-}
-
-func blockTTLFromConfig(cfg config.BlockingConfig) uint32 {
-	if cfg.BlockTTL <= 0 {
-		return defaultBlockTTL
-	}
-
-	return uint32(time.Duration(cfg.BlockTTL).Seconds())
-}
-
-func blockTypeFromConfig(cfg config.BlockingConfig) string {
-	if cfgBlockType := strings.TrimSpace(strings.ToUpper(cfg.BlockType)); cfgBlockType != "" {
-		return cfgBlockType
-	}
-
-	return defaultBlockType
 }

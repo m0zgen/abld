@@ -14,10 +14,11 @@ configuration properties as [JSON](config.yml).
 | Parameter       | Type              | Mandatory             | Default value      | Description                                       |
 | --------------- | ----------------- | --------------------- | -----------------  | ------------------------------------------------- |
 | port            | [IP]:port         | no                    | 53                 | Port and optional bind ip address to serve DNS endpoint (TCP and UDP). If you wish to specify a specific IP, you can do so such as 192.168.0.1:53. Example: 53, :53, 127.0.0.1:53  |
+| tlsPort         | [IP]:port         | no                    |                    | Port and optional bind ip address to serve DoT DNS endpoint (DNS-over-TLS). If you wish to specify a specific IP, you can do so such as 192.168.0.1:853. Example: 83, :853, 127.0.0.1:853  |
 | httpPort        | int (1 - 65535)   | no                    |                    | HTTP listener port and optional bind ip address . If > 0, will be used for prometheus metrics, pprof, REST API, DoH ...If you wish to specify a specific IP, you can do so such as 192.168.0.1:4000. Example: 4000, :4000, 127.0.0.1:4000 |
 | httpsPort       | int (1 - 65535)   | no                    |                    | HTTPS listener port and optional bind ip address . If > 0, will be used for prometheus metrics, pprof, REST API, DoH... If you wish to specify a specific IP, you can do so such as 192.168.0.1:443 |
-| httpsCertFile   | path              | yes, if httpsPort > 0 |                    | path to cert and key file for SSL encryption |
-| httpsKeyFile    | path              | yes, if httpsPort > 0 |                    | path to cert and key file for SSL encryption |
+| certFile        | path              | yes, if httpsPort > 0 |                    | path to cert and key file for SSL encryption (DoH and DoT) |
+| keyFile         | path              | yes, if httpsPort > 0 |                    | path to cert and key file for SSL encryption (DoH and DoT) |
 | bootstrapDns    | IP:port           | no                    |                    | use this DNS server to resolve blacklist urls and upstream DNS servers. Useful if no DNS resolver is configured and blocky needs to resolve a host name. NOTE: Works only on Linux/*Nix OS due to golang limitations under windows.|
 | disableIPv6     | bool              | no                    | false              | Drop all AAAA query if set to true
 | logLevel        | enum (debug, info, warn, error)           | no                 | info               | Log level  |
@@ -157,17 +158,34 @@ client.lan.net to 192.170.1.2 and 192.170.1.3.
 
 ## Client name lookup
 
-Blocky can try to resolve a user-friendly client name from the IP address. This is useful for defining of blocking
-groups, since IP address can change dynamically. Blocky uses rDNS to retrieve client's name. To use this feature, you
-can configure a DNS server for client lookup (typically your router). You can also define client names manually per IP
-address.
+Blocky can try to resolve a user-friendly client name from the IP address or server URL (DoT and DoH). This is useful
+for defining of blocking groups, since IP address can change dynamically.
 
-### Single name order
+### Resolving client name from URL/Host
+
+If DoT or DoH is enabled, you can use a subdomain prefixed with `id-` to provide a client name (wildcard ssl certificate
+recommended).
+
+Example: domain `example.com`
+
+DoT Host: `id-bob.example.com` -> request's client name is `bob`
+DoH URL: `https://id-bob.example.com/dns-query` -> request's client name is `bob`
+
+For DoH you can also pass the client name as url parameter:
+
+DoH URL: `htpps://blocky.example.com/dns-query/alice` -> request's client name is `alice`
+
+### Resolving client name from IP address
+
+Blocky uses rDNS to retrieve client's name. To use this feature, you can configure a DNS server for client lookup (
+typically your router). You can also define client names manually per IP address.
+
+#### Single name order
 
 Some routers return multiple names for the client (host name and user defined name). With
 parameter `clientLookup.singleNameOrder` you can specify, which of retrieved names should be used.
 
-### Custom client name mapping
+#### Custom client name mapping
 
 You can also map a particular client name to one (or more) IP (ipv4/ipv6) addresses. Parameter `clientLookup.clients`
 contains a map of client name and multiple IP addresses.
@@ -327,15 +345,35 @@ Negative value will deactivate automatically refresh.
 
     Refresh every hour.
 
-### Download timeout
+### Download
 
-You can override the default download timeout (**duration format**) of 60 seconds (for each URL) for big lists or slow
-internet connection:
+You can configure the list download attempts according to your internet connection:
+
+| Parameter                     | Type            | Mandatory | Default value      | Description                                       |
+| ----------------------------- | --------------- | --------- | ------------------ | ------------------------------------------------- |
+| downloadTimeout               | duration format | no        | 60s                | Download attempt timeout |
+| downloadAttempts              | int             | no        | 3                  | How many download attempts schould be performed |
+| downloadCooldown              | duration format | no        | 1s                 | Time between the download attempts|
+
 !!! example
 
     ```yaml
     blocking:
      downloadTimeout: 4m
+     downloadAttempts: 5
+     downloadCooldown: 10s
+    ```
+
+### Fail on start
+
+You can ensure with parameter `failStartOnListError = true` that the application will fail if at least one list can't be
+downloaded or opened. Default value is `false`.
+
+!!! example
+
+    ```yaml
+    blocking:
+     failStartOnListError: false
     ```
 
 ## Caching
@@ -360,6 +398,7 @@ With following parameters you can tune the caching behavior:
 | caching.prefetchExpires       | duration format | no        | 2h                 | Prefetch track time window |
 | caching.prefetchThreshold     | int             | no        | 5                  | Name queries threshold for prefetch
 | caching.prefetchMaxItemsCount | int             | no        | 0 (unlimited)      | Max number of domains to be kept in cache for prefetching (soft limit). Default (0): unlimited. Useful on systems with limited amount of RAM. |
+| caching.cacheTimeNegative     | duration format | no        | 30m                | Time how long negative results are cached. A value of -1 will disable caching for negative results. |
 
 !!! example
 
@@ -404,14 +443,16 @@ You can select one of following query log types:
 - `mysql` - log each query in the external MySQL/MariaDB database
 - `csv` - log into CSV file (one per day)
 - `csv-client` - log into CSV file (one per day and per client)
+- `console` - log into console output
+- `none` - do not log any queries
 
 Configuration parameters:
 
-| Parameter                | Type                                      | Mandatory | Default value      | Description                                                                 |
-| ---------------------    | ----------------------------------------- | --------- | ------------------ | --------------------------------------------------------------------------- |
-| queryLog.type            | enum (mysql, csv, csv-client (see above)) | no        |                    |  Type of logging target. Console if empty                                   |
-| queryLog.target          | string                                    | no        |                    |  directory for writing the logs (for csv) or database url (for mysql)       |
-| queryLog.logRetentionDays| int                                       | no        | 0                  |  if > 0, deletes log files/database entries which are older than ... days   |
+| Parameter                | Type                                                     | Mandatory | Default value      | Description                                                                 |
+| ---------------------    | -------------------------------------------------------- | --------- | ------------------ | --------------------------------------------------------------------------- |
+| queryLog.type            | enum (mysql, csv, csv-client, console, none (see above)) | no        |                    |  Type of logging target. Console if empty                                   |
+| queryLog.target          | string                                                   | no        |                    |  directory for writing the logs (for csv) or database url (for mysql)       |
+| queryLog.logRetentionDays| int                                                      | no        | 0                  |  if > 0, deletes log files/database entries which are older than ... days   |
 
 !!! hint
 
@@ -438,10 +479,10 @@ example for Database
         logRetentionDays: 7
     ```
 
-## HTTPS configuration (for DoH)
+## SSL certificate configuration (DoH / TLS listener)
 
 See [Wiki - Configuration of HTTPS](https://github.com/0xERR0R/blocky/wiki/Configuration-of-HTTPS-for-DoH-and-Rest-API)
-for detailed information, how to configure HTTPS.
+for detailed information, how to create and configure SSL certificates.
 
 DoH url: `https://host:port/dns-query`
 
