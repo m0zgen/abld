@@ -95,4 +95,5 @@ You can inform me about of accidents blocked / unblocked domains through [DNS-HO
 * https://github.com/m0zgen/prometheus-stack-installer.git
 * https://github.com/m0zgen/dns-hole.git
 * https://github.com/m0zgen/dns-tester.git
+* https://github.com/m0zgen/bench-dns.git
 * https://lab.sys-adm.in
