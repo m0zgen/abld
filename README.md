@@ -76,6 +76,19 @@ Based on [Blocky](https://github.com/0xERR0R/blocky).
     * Supports x86-64 and ARM architectures -> runs fine on Raspberry PI
     * Community supported Helm chart for k8s deployment
 
+## How to setup
+
+* In [Google Chrome](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-google-chrome)
+* In [Mozilla Firefox](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-mozilla-firefox)
+* In [Brave Browser](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-brave)
+* In [Edge](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-edge)
+* [Android](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-android)
+* [iOS/MacOS](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-ios--macos)
+* [Windows](https://github.com/m0zgen/blocky-listener-daemon/wiki#windows-10)
+* [Routers](https://github.com/m0zgen/blocky-listener-daemon/wiki#routers)
+* [Wiki](https://github.com/m0zgen/blocky-listener-daemon/wiki)
+
+
 ## Quick start
 
 You can jump to [Installation](https://0xerr0r.github.io/blocky/installation/) chapter in the documentation.
