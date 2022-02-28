@@ -17,4 +17,11 @@ package-lock.json
 tools/builds
 tools/configs
 tools/test*
+
+# Distro
 .DS_Store
+
+# Tools
+tools/builds
+tools/tests
+tools/configs
