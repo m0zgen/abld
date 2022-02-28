@@ -7,7 +7,10 @@ import (
 	"github.com/0xERR0R/blocky/lists"
 	. "github.com/0xERR0R/blocky/log"
 	. "github.com/0xERR0R/blocky/model"
+	"github.com/0xERR0R/blocky/redis"
 	"github.com/0xERR0R/blocky/util"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/creasty/defaults"
 
 	"os"
 	"time"
@@ -63,7 +66,7 @@ badcnamedomain.com`)
 	JustBeforeEach(func() {
 		m = &resolverMock{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: mockAnswer}, nil)
-		tmp, _ := NewBlockingResolver(sutConfig)
+		tmp, _ := NewBlockingResolver(sutConfig, nil)
 		sut = tmp.(*BlockingResolver)
 		sut.Next(m)
 		sut.RefreshLists()
@@ -96,13 +99,50 @@ badcnamedomain.com`)
 				Expect(err).Should(Succeed())
 
 				// recreate to trigger a reload
-				tmp, _ := NewBlockingResolver(sutConfig)
+				tmp, _ := NewBlockingResolver(sutConfig, nil)
 				sut = tmp.(*BlockingResolver)
 
-				time.Sleep(time.Second)
+				Eventually(groupCnt, "1s").Should(HaveLen(2))
+			})
+		})
+	})
 
-				Expect(groupCnt).Should(HaveLen(2))
+	Describe("Blocking with full-qualified client name", func() {
+		BeforeEach(func() {
+			sutConfig = config.BlockingConfig{
+				BlockType: "ZEROIP",
+				BlockTTL:  config.Duration(time.Minute),
+				BlackLists: map[string][]string{
+					"gr1": {group1File.Name()},
+					"gr2": {group2File.Name()},
+				},
+				ClientGroupsBlock: map[string][]string{
+					"default":            {"gr1"},
+					"full.qualified.com": {"gr2"},
+				},
+			}
 
+		})
+
+		When("Full-qualified group name is used", func() {
+			It("bla", func() {
+				tmp, _ := NewBlockingResolver(sutConfig, nil)
+				sut = tmp.(*BlockingResolver)
+				sut.Next(&MockResolver{AnswerFn: func(t uint16, qName string) *dns.Msg {
+					if t == dns.TypeA && qName == "full.qualified.com." {
+						a, _ := util.NewMsgWithAnswer(qName, 60*60, dns.TypeA, "192.168.178.39")
+						return a
+					}
+					return nil
+				}})
+				sut.RefreshLists()
+				Bus().Publish(ApplicationStarted, "")
+				Eventually(func(g Gomega) {
+					resp, err = sut.Resolve(newRequestWithClient("blocked2.com.", dns.TypeA, "192.168.178.39", "client1"))
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(resp.Res.Answer).ShouldNot(BeNil())
+					g.Expect(resp.Res.Answer).Should(BeDNSRecord("blocked2.com.", dns.TypeA, 60, "0.0.0.0"))
+				}, "1s").Should(Succeed())
 			})
 		})
 	})
@@ -666,8 +706,9 @@ badcnamedomain.com`)
 						enabled = state
 					})
 					// wait 1 sec
-					time.Sleep(time.Second)
-					Expect(enabled).Should(BeTrue())
+					Eventually(func() bool {
+						return enabled
+					}, "1s").Should(BeTrue())
 
 					resp, err := sut.Resolve(newRequestWithClient("blocked3.com.", dns.TypeA, "1.2.1.2", "unknown"))
 					Expect(err).Should(Succeed())
@@ -727,8 +768,9 @@ badcnamedomain.com`)
 						enabled = state
 					})
 					// wait 1 sec
-					time.Sleep(time.Second)
-					Expect(enabled).Should(BeTrue())
+					Eventually(func() bool {
+						return enabled
+					}, "1s").Should(BeTrue())
 
 					resp, err := sut.Resolve(newRequestWithClient("blocked3.com.", dns.TypeA, "1.2.1.2", "unknown"))
 					Expect(err).Should(Succeed())
@@ -813,7 +855,7 @@ badcnamedomain.com`)
 
 				_, _ = NewBlockingResolver(config.BlockingConfig{
 					BlockType: "wrong",
-				})
+				}, nil)
 
 				Expect(fatal).Should(BeTrue())
 			})
@@ -826,10 +868,134 @@ badcnamedomain.com`)
 					WhiteLists:           map[string][]string{"whitelist": {"wrongPath"}},
 					FailStartOnListError: true,
 					BlockType:            "zeroIp",
-				})
+				}, nil)
 				Expect(err).Should(HaveOccurred())
 			})
 		})
 	})
 
+	Describe("Redis is configured", func() {
+		When("disable", func() {
+			var redisServer *miniredis.Miniredis
+			var redisClient *redis.Client
+
+			redisServer, err = miniredis.Run()
+
+			Expect(err).Should(Succeed())
+
+			var rcfg config.RedisConfig
+			err = defaults.Set(&rcfg)
+
+			Expect(err).Should(Succeed())
+
+			rcfg.Address = redisServer.Addr()
+			redisClient, err = redis.New(&rcfg)
+
+			Expect(err).Should(Succeed())
+			Expect(redisClient).ShouldNot(BeNil())
+
+			sutConfig = config.BlockingConfig{
+				BlockType: "ZEROIP",
+				BlockTTL:  config.Duration(time.Minute),
+			}
+
+			tmp, err2 := NewBlockingResolver(sutConfig, redisClient)
+			Expect(err2).Should(Succeed())
+			sut = tmp.(*BlockingResolver)
+			sut.EnableBlocking()
+
+			redisMockMsg := &redis.EnabledMessage{
+				State: false,
+			}
+			redisClient.EnabledChannel <- redisMockMsg
+
+			Eventually(func() bool {
+				return sut.status.enabled
+			}, "50ms").Should(BeFalse())
+
+			redisServer.Close()
+		})
+		When("disable", func() {
+			var redisServer *miniredis.Miniredis
+			var redisClient *redis.Client
+
+			redisServer, err = miniredis.Run()
+
+			Expect(err).Should(Succeed())
+
+			var rcfg config.RedisConfig
+			err = defaults.Set(&rcfg)
+
+			Expect(err).Should(Succeed())
+
+			rcfg.Address = redisServer.Addr()
+			redisClient, err = redis.New(&rcfg)
+
+			Expect(err).Should(Succeed())
+			Expect(redisClient).ShouldNot(BeNil())
+
+			sutConfig = config.BlockingConfig{
+				BlockType: "ZEROIP",
+				BlockTTL:  config.Duration(time.Minute),
+			}
+
+			tmp, err2 := NewBlockingResolver(sutConfig, redisClient)
+			Expect(err2).Should(Succeed())
+			sut = tmp.(*BlockingResolver)
+			sut.EnableBlocking()
+
+			redisMockMsg := &redis.EnabledMessage{
+				State:  false,
+				Groups: []string{"unknown"},
+			}
+			redisClient.EnabledChannel <- redisMockMsg
+
+			Eventually(func() bool {
+				return sut.status.enabled
+			}, "50ms").Should(BeTrue())
+
+			redisServer.Close()
+		})
+		When("enable", func() {
+			var redisServer *miniredis.Miniredis
+			var redisClient *redis.Client
+
+			redisServer, err = miniredis.Run()
+
+			Expect(err).Should(Succeed())
+
+			var rcfg config.RedisConfig
+			err = defaults.Set(&rcfg)
+
+			Expect(err).Should(Succeed())
+
+			rcfg.Address = redisServer.Addr()
+			redisClient, err = redis.New(&rcfg)
+
+			Expect(err).Should(Succeed())
+			Expect(redisClient).ShouldNot(BeNil())
+
+			sutConfig = config.BlockingConfig{
+				BlockType: "ZEROIP",
+				BlockTTL:  config.Duration(time.Minute),
+			}
+
+			tmp, err2 := NewBlockingResolver(sutConfig, redisClient)
+			Expect(err2).Should(Succeed())
+			sut = tmp.(*BlockingResolver)
+			err = sut.DisableBlocking(time.Hour, []string{})
+			Expect(err).Should(Succeed())
+
+			redisMockMsg := &redis.EnabledMessage{
+				State: true,
+			}
+			redisClient.EnabledChannel <- redisMockMsg
+
+			Eventually(func() bool {
+				return sut.status.enabled
+			}, "50ms").Should(BeTrue())
+
+			redisServer.Close()
+		})
+	})
 })

@@ -3,9 +3,13 @@ upstream:
   # format for resolver: [net:]host:[port][/path]. net could be empty (default, shortcut for tcp+udp), tcp+udp, tcp, udp, tcp-tls or https (DoH). If port is empty, default port will be used (53 for udp and tcp, 853 for tcp-tls, 443 for https (Doh))
   # this configuration is mandatory, please define at least one external DNS resolver
   default:
-    - 46.182.19.48
-    - 80.241.218.68
+    # example for tcp+udp IPv4 server (https://digitalcourage.de/)
+    - 5.9.164.112
+    # Cloudflare
+    - 1.1.1.1
+    # example for DNS-over-TLS server (DoT)
     - tcp-tls:fdns1.dismail.de:853
+    # example for DNS-over-HTTPS (DoH)
     - https://dns.digitale-gesellschaft.ch/dns-query
   # optional: use client name (with wildcard support: * - sequence of any characters, [0-9] - range)
   # or single ip address / client subnet as CIDR notation
@@ -18,6 +22,7 @@ upstreamTimeout: 2s
 # optional: custom IP address(es) for domain name (with all sub-domains). Multiple addresses must be separated by a comma
 # example: query "printer.lan" or "my.printer.lan" will return 192.168.178.3
 customDNS:
+  customTTL: 1h
   mapping:
     printer.lan: 192.168.178.3,2001:0db8:85a3:08d3:1319:8a2e:0370:7344
 
@@ -38,9 +43,7 @@ blocking:
     ads:
       - https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt
       - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
-      - https://mirror1.malwaredomains.com/files/justdomains
       - http://sysctl.org/cameleon/hosts
-      - https://zeustracker.abuse.ch/blocklist.php?download=domainblocklist
       - https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt
       - |
         # inline definition with YAML literal block scalar style
@@ -142,19 +145,40 @@ prometheus:
 
 # optional: write query information (question, answer, client, duration etc.) to daily csv file
 queryLog:
-  # optional one of: mysql, csv, csv-client. If empty, log to console
+  # optional one of: mysql, postgresql, csv, csv-client. If empty, log to console
   type: mysql
-  # directory (should be mounted as volume in docker) for csv, db connection string for mysql
-  target: db_user:db_password@tcp(db_host_or_ip:3306)/db_user?charset=utf8mb4&parseTime=True&loc=Local
+  # directory (should be mounted as volume in docker) for csv, db connection string for mysql/postgresql
+  target: db_user:db_password@tcp(db_host_or_ip:3306)/db_name?charset=utf8mb4&parseTime=True&loc=Local
+  #postgresql target: postgres://user:password@db_host_or_ip:5432/db_name
   # if > 0, deletes log files which are older than ... days
   logRetentionDays: 7
+  # optional: Max attempts to create specific query log writer, default: 3
+  creationAttempts: 1
+  # optional: Time between the creation attempts, default: 2s
+  creationCooldown: 2s
 
-# optional: DNS listener port and bind ip address, default 53 (UDP and TCP). Example: 53, :53, 127.0.0.1:53
+# optional: Blocky can synchronize its cache and blocking state between multiple instances through redis.
+redis:
+  # Server address and port
+  address: redis:6379
+  # Password if necessary
+  password: passwd
+  # Database, default: 0
+  database: 2
+  # Connection is required for blocky to start. Default: false
+  required: true
+  # Max connection attempts, default: 3
+  connectionAttempts: 10
+  # Time between the connection attempts, default: 1s
+  connectionCooldown: 3s
+
+# optional: DNS listener port(s) and bind ip address(es), default 53 (UDP and TCP). Example: 53, :53, "127.0.0.1:5353,[::1]:5353"
 port: 53
-# optional: Port for DoT (DNS-over-TLS) listener. Example: 853, 127.0.0.1:853
+# optional: Port(s) and bind ip address(es) for DoT (DNS-over-TLS) listener. Example: 853, 127.0.0.1:853
 #tlsPort: 53
-# optional: HTTPS listener port and bind ip address, default empty = no http listener. If > 0, will be used for prometheus metrics, pprof, REST API, DoH... Example: 443, :443, 127.0.0.1:443
-httpsPort: 443
+# optional: HTTPS listener port(s) and bind ip address(es), default empty = no http listener. If > 0, will be used for prometheus metrics, pprof, REST API, DoH... Example: 443, :443, 127.0.0.1:443
+httpPort: 4000
+#httpsPort: 443
 # mandatory, if https port > 0: path to cert and key file for SSL encryption
 #certFile: server.crt
 #keyFile: server.key
@@ -162,6 +186,14 @@ httpsPort: 443
 bootstrapDns: tcp:1.1.1.1
 # optional: Drop all AAAA query if set to true. Default: false
 disableIPv6: false
+# optional: if path defined, use this file for query resolution (A, AAAA and rDNS). Default: empty
+hostsFile:
+  # optional: Path to hosts file (e.g. /etc/hosts on Linux)
+  filePath: /etc/hosts
+  # optional: TTL, default: 1h
+  hostsTTL: 60m
+  # optional: Time between hosts file refresh, default: 1h
+  refreshPeriod: 30m
 # optional: Log level (one from debug, info, warn, error). Default: info
 logLevel: info
 # optional: Log format (text or json). Default: text

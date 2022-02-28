@@ -11,20 +11,20 @@ configuration properties as [JSON](config.yml).
 
 ## Basic configuration
 
-| Parameter       | Type              | Mandatory             | Default value      | Description                                       |
-| --------------- | ----------------- | --------------------- | -----------------  | ------------------------------------------------- |
-| port            | [IP]:port         | no                    | 53                 | Port and optional bind ip address to serve DNS endpoint (TCP and UDP). If you wish to specify a specific IP, you can do so such as 192.168.0.1:53. Example: 53, :53, 127.0.0.1:53  |
-| tlsPort         | [IP]:port         | no                    |                    | Port and optional bind ip address to serve DoT DNS endpoint (DNS-over-TLS). If you wish to specify a specific IP, you can do so such as 192.168.0.1:853. Example: 83, :853, 127.0.0.1:853  |
-| httpPort        | int (1 - 65535)   | no                    |                    | HTTP listener port and optional bind ip address . If > 0, will be used for prometheus metrics, pprof, REST API, DoH ...If you wish to specify a specific IP, you can do so such as 192.168.0.1:4000. Example: 4000, :4000, 127.0.0.1:4000 |
-| httpsPort       | int (1 - 65535)   | no                    |                    | HTTPS listener port and optional bind ip address . If > 0, will be used for prometheus metrics, pprof, REST API, DoH... If you wish to specify a specific IP, you can do so such as 192.168.0.1:443 |
-| certFile        | path              | yes, if httpsPort > 0 |                    | path to cert and key file for SSL encryption (DoH and DoT) |
-| keyFile         | path              | yes, if httpsPort > 0 |                    | path to cert and key file for SSL encryption (DoH and DoT) |
-| bootstrapDns    | IP:port           | no                    |                    | use this DNS server to resolve blacklist urls and upstream DNS servers. Useful if no DNS resolver is configured and blocky needs to resolve a host name. NOTE: Works only on Linux/*Nix OS due to golang limitations under windows.|
-| disableIPv6     | bool              | no                    | false              | Drop all AAAA query if set to true
-| logLevel        | enum (debug, info, warn, error)           | no                 | info               | Log level  |
-| logFormat       | enum (text, json) | no                    | text               | Log format (text or json). |
-| logTimestamp    | bool              |no                     | true               | Log time stamps (true or false). |
-| logPrivacy      | bool              |no                     | false              | Obfuscate log output (replace all alphanumeric characters with *) for user sensitive data like request domains or responses to increase privacy. |
+| Parameter    | Type                            | Mandatory             | Default value | Description                                                                                                                                                                                                                                       |
+|--------------|---------------------------------|-----------------------|---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| port         | [IP]:port[,[IP]:port]*          | no                    | 53            | Port(s) and optional bind ip address(es) to serve DNS endpoint (TCP and UDP). If you wish to specify a specific IP, you can do so such as `192.168.0.1:53`. Example: `53`, `:53`, `127.0.0.1:53,[::1]:53`                                         |
+| tlsPort      | [IP]:port[,[IP]:port]*          | no                    |               | Port(s) and optional bind ip address(es) to serve DoT DNS endpoint (DNS-over-TLS). If you wish to specify a specific IP, you can do so such as `192.168.0.1:853`. Example: `83`, `:853`, `127.0.0.1:853,[::1]:853`                                |
+| httpPort     | [IP]:port[,[IP]:port]*          | no                    |               | Port(s) and optional bind ip address(es) to serve HTTP used for prometheus metrics, pprof, REST API, DoH... If you wish to specify a specific IP, you can do so such as `192.168.0.1:4000`. Example: `4000`, `:4000`, `127.0.0.1:4000,[::1]:4000` |
+| httpsPort    | [IP]:port[,[IP]:port]*          | no                    |               | Port(s) and optional bind ip address(es) to serve HTTPS used for prometheus metrics, pprof, REST API, DoH... If you wish to specify a specific IP, you can do so such as `192.168.0.1:443`. Example: `443`, `:443`, `127.0.0.1:443,[::1]:443`     |
+| certFile     | path                            | yes, if httpsPort > 0 |               | Path to cert and key file for SSL encryption (DoH and DoT)                                                                                                                                                                                        |
+| keyFile      | path                            | yes, if httpsPort > 0 |               | Path to cert and key file for SSL encryption (DoH and DoT)
+| bootstrapDns | IP:port                         | no                    |               | Use this DNS server to resolve blacklist urls and upstream DNS servers. Useful if no DNS resolver is configured and blocky needs to resolve a host name. NOTE: Works only on Linux/*Nix OS due to golang limitations under windows.               |
+| disableIPv6  | bool                            | no                    | false         | Drop all AAAA query if set to true                                                                                                                                                                                                                |
+| logLevel     | enum (debug, info, warn, error) | no                    | info          | Log level                                                                                                                                                                                                                                         |
+| logFormat    | enum (text, json)               | no                    | text          | Log format (text or json).                                                                                                                                                                                                                        |
+| logTimestamp | bool                            | no                    | true          | Log time stamps (true or false).                                                                                                                                                                                                                  |
+| logPrivacy   | bool                            | no                    | false         | Obfuscate log output (replace all alphanumeric characters with *) for user sensitive data like request domains or responses to increase privacy.                                                                                                  |
 
 !!! example
 
@@ -52,10 +52,10 @@ following network protocols (net part of the resolver URL):
 
 Each resolver must be defined as a string in following format: `[net:]host:[port][/path]`.
 
-| Parameter | Type                             | Mandatory | Default value | 
-| --------- | -------------------------------- | --------- | ------------- |
-| net       | enum (tcp+udp, tcp-tls or https) | no        | tcp+udp | 
-| host      | IP or hostname                   | yes       | | 
+| Parameter | Type                             | Mandatory | Default value                                     |
+|-----------|----------------------------------|-----------|---------------------------------------------------|
+| net       | enum (tcp+udp, tcp-tls or https) | no        | tcp+udp                                           |
+| host      | IP or hostname                   | yes       |                                                   |
 | port      | int (1 - 65535)                  | no        | 53 for udp/tcp, 853 for tcp-tls and 443 for https |
 
 Blocky needs at least the configuration of the **default** group. This group will be used as a fallback, if no client
@@ -73,19 +73,19 @@ CIDR notation.
     ```yaml
     upstream:
       default:
-        - 46.182.19.48
-        - 80.241.218.68
-        - tcp-tls:fdns1.dismail.de:853
-        - https://dns.digitale-gesellschaft.ch/dns-query
+      - 5.9.164.112
+      - 1.1.1.1
+      - tcp-tls:fdns1.dismail.de:853
+      - https://dns.digitale-gesellschaft.ch/dns-query
       laptop*:
-        - 123.123.123.123
+      - 123.123.123.123
       10.43.8.67/28:
-        - 1.1.1.1
-        - 9.9.9.9
+      - 1.1.1.1
+      - 9.9.9.9
     ```
-    
-    Use `123.123.123.123` as single upstream DNS resolver for client laptop-home, 
-    `1.1.1.1` and `9.9.9.9` for all clients in the sub-net `10.43.8.67/28` and 4 resolvers (default) for all others clients.
+
+Use `123.123.123.123` as single upstream DNS resolver for client laptop-home,
+`1.1.1.1` and `9.9.9.9` for all clients in the sub-net `10.43.8.67/28` and 4 resolvers (default) for all others clients.
 
 !!! note
 
@@ -103,7 +103,7 @@ value by setting the `upstreamTimeout` configuration parameter (in **duration fo
 
     ```yaml
     upstream:
-      default:
+        default:
         - 46.182.19.48
         - 80.241.218.68
     upstreamTimeout: 5s
@@ -115,12 +115,18 @@ You can define your own domain name to IP mappings. For example, you can use a u
 or define a domain name for your local device on order to use the HTTPS certificate. Multiple IP addresses for one
 domain must be separated by a comma.
 
+| Parameter | Type                                    | Mandatory | Default value |
+|-----------|-----------------------------------------|-----------|---------------|
+| customTTL | duration (no unit is minutes)           | no        | 1h            |
+| mapping   | string: string (hostname: address list) | no        |               |
+
 !!! example
 
     ```yaml
     customDNS:
-      mapping:
-        printer.lan: 192.168.178.3 
+        customTTL: 1h
+    mapping:
+        printer.lan: 192.168.178.3
         otherdevice.lan: 192.168.178.15,2001:0db8:85a3:08d3:1319:8a2e:0370:7344
     ```
 
@@ -129,7 +135,7 @@ my.printer.lan" will return 192.168.178.3 as IP address.
 
 ## Conditional DNS resolution
 
-You can define, which DNS resolver(s) should be used for queries for the particular domain (with all sub-domains). This
+You can define, which DNS resolver(s) should be used for queries for the particular domain (with all subdomains). This
 is for example useful, if you want to reach devices in your local network by the name. Since only your router know which
 hostname belongs to which IP address, all DNS queries for the local network should be redirected to the router.
 
@@ -140,21 +146,26 @@ resolver lookup is performed.
 
     ```yaml
     conditional:
-      rewrite:
-        example.com: fritz.box
-        replace-me.com: with-this.com
-      mapping:
-        fritz.box: 192.168.178.1
-        lan.net: 192.170.1.2,192.170.1.3
-        # for reverse DNS lookups of local devices
-        178.168.192.in-addr.arpa: 192.168.178.1
+        rewrite:
+            example.com: fritz.box
+            replace-me.com: with-this.com
+        mapping:
+            fritz.box: 192.168.178.1
+            lan.net: 192.170.1.2,192.170.1.3
+            # for reverse DNS lookups of local devices
+            178.168.192.in-addr.arpa: 192.168.178.1
+            # for all unqualified hostnames
+            .: 168.168.0.1
     ```
 
-    In this example, a DNS query "client.fritz.box" will be redirected to the router's DNS server at 192.168.178.1 and client.lan.net to 192.170.1.2 and 192.170.1.3. 
-    The query client.example.com will be rewritten to "client.fritz.box" and also redirected to the resolver at 192.168.178.1
+!!! tip
 
-In this example, a DNS query "client.fritz.box" will be redirected to the router's DNS server at 192.168.178.1 and
-client.lan.net to 192.170.1.2 and 192.170.1.3.
+    You can use `.` as wildcard for all non full qualified domains (domains without dot)
+
+In this example, a DNS query "client.fritz.box" will be redirected to the router's DNS server at 192.168.178.1 and client.lan.net to 192.170.1.2 and 192.170.1.3.
+The query client.example.com will be rewritten to "client.fritz.box" and also redirected to the resolver at 192.168.178.1. All unqualified hostnames (e.g. 'test')
+will be redirected to the DNS server at 168.168.0.1
+
 
 ## Client name lookup
 
@@ -173,7 +184,7 @@ DoH URL: `https://id-bob.example.com/dns-query` -> request's client name is `bob
 
 For DoH you can also pass the client name as url parameter:
 
-DoH URL: `htpps://blocky.example.com/dns-query/alice` -> request's client name is `alice`
+DoH URL: `https://blocky.example.com/dns-query/alice` -> request's client name is `alice`
 
 ### Resolving client name from IP address
 
@@ -215,7 +226,7 @@ a plain domain list (one domain per line). Blocky also supports regex as more po
 Blocky uses [DNS sinkhole](https://en.wikipedia.org/wiki/DNS_sinkhole) approach to block a DNS query. Domain name from
 the request, IP address from the response, and the CNAME record will be checked against configured blacklists.
 
-To avoid overblocking, you can define or use already existing whitelists.
+To avoid over-blocking, you can define or use already existing whitelists.
 
 ### Definition black and whitelists
 
@@ -226,16 +237,16 @@ in hosts format (YAML literal block scalar style). All Urls must be grouped to a
 
     ```yaml
     blocking:
-      blackLists:
-        ads:
-          - https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt
-          - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
-          - |
-            # inline definition with YAML literal block scalar style
-            someadsdomain.com
-            anotheradsdomain.com
-            # this is a regex
-            /^banners?[_.-]/
+    blackLists:
+    ads:
+    - https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt
+    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+    - |
+    # inline definition with YAML literal block scalar style
+    someadsdomain.com
+    anotheradsdomain.com
+    # this is a regex
+    /^banners?[_.-]/
         special:
           - https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews/hosts
       whiteLists:
@@ -254,6 +265,9 @@ in hosts format (YAML literal block scalar style). All Urls must be grouped to a
     If a group has **only** whitelist entries -> this means only domains from this list are allowed, all other domains will
     be blocked
 
+!!! note
+    Please define also client group mapping, otherwise you black and whitelist definition will have no effect
+
 #### Regex support
 
 You can use regex to define patterns to block. A regex entry must start and end with the slash character (/). Some
@@ -271,8 +285,11 @@ group, which blocky adult sites.
 
 Clients without a group assignment will use automatically the **default** group.
 
-You can use the client name (see [Client name lookup](#client-name-lookup)), client's IP address or a client subnet as
-CIDR notation.
+You can use the client name (see [Client name lookup](#client-name-lookup)), client's IP address, client's full-qualified domain name
+or a client subnet as CIDR notation.
+
+If full-qualified domain name is used (for example "myclient.ddns.org"), blocky will try to resolve the IP address (A and AAAA records) of this domain.
+If client's IP address matches with the result, the defined group will be used.
 
 !!! example
 
@@ -303,17 +320,17 @@ CIDR notation.
 You can configure, which response should be sent to the client, if a requested query is blocked (only for A and AAAA
 queries, NXDOMAIN for other types):
 
-| blockType  | Example  | Description                                                      |
-| ---------- | -------  | ---------------------------------------------------------------- |
-| zeroIP     | zeroIP   | This is the default block type. Server returns 0.0.0.0 (or :: for IPv6) as result for A and AAAA queries |
-| nxDomain   | nxDomain | return NXDOMAIN as return code |
-| custom IPs | 192.100.100.15, 2001:0db8:85a3:08d3:1319:8a2e:0370:7344 | comma separated list of destination IP addresses. Should contain ipv4 and ipv6 to cover all query types. Useful with running web server on this address to display the "blocked" page.|
+| blockType  | Example                                                 | Description                                                                                                                                                                            |
+|------------|---------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| zeroIP     | zeroIP                                                  | This is the default block type. Server returns 0.0.0.0 (or :: for IPv6) as result for A and AAAA queries                                                                               |
+| nxDomain   | nxDomain                                                | return NXDOMAIN as return code                                                                                                                                                         |
+| custom IPs | 192.100.100.15, 2001:0db8:85a3:08d3:1319:8a2e:0370:7344 | comma separated list of destination IP addresses. Should contain ipv4 and ipv6 to cover all query types. Useful with running web server on this address to display the "blocked" page. |
 
 !!! example
 
     ```yaml
     blocking:
-      blockType: nxDomain
+    blockType: nxDomain
     ```
 
 ### Block TTL
@@ -340,28 +357,28 @@ Negative value will deactivate automatically refresh.
 
     ```yaml
     blocking:
-      refreshPeriod: 60m
-    ```
+    refreshPeriod: 60m
+```
 
-    Refresh every hour.
+Refresh every hour.
 
 ### Download
 
 You can configure the list download attempts according to your internet connection:
 
-| Parameter                     | Type            | Mandatory | Default value      | Description                                       |
-| ----------------------------- | --------------- | --------- | ------------------ | ------------------------------------------------- |
-| downloadTimeout               | duration format | no        | 60s                | Download attempt timeout |
-| downloadAttempts              | int             | no        | 3                  | How many download attempts schould be performed |
-| downloadCooldown              | duration format | no        | 1s                 | Time between the download attempts|
+| Parameter        | Type            | Mandatory | Default value | Description                                     |
+|------------------|-----------------|-----------|---------------|-------------------------------------------------|
+| downloadTimeout  | duration format | no        | 60s           | Download attempt timeout                        |
+| downloadAttempts | int             | no        | 3             | How many download attempts should be performed |
+| downloadCooldown | duration format | no        | 1s            | Time between the download attempts              |
 
 !!! example
 
     ```yaml
     blocking:
-     downloadTimeout: 4m
-     downloadAttempts: 5
-     downloadCooldown: 10s
+        downloadTimeout: 4m
+        downloadAttempts: 5
+        downloadCooldown: 10s
     ```
 
 ### Fail on start
@@ -389,24 +406,50 @@ With following parameters you can tune the caching behavior:
 
     Wrong values can significantly increase external DNS traffic or memory consumption.
 
-| Parameter                     | Type            | Mandatory | Default value      | Description                                       |
-| ----------------------------- | --------------- | --------- | ------------------ | ------------------------------------------------- |
-| caching.minTime               | duration format | no        | 0 (use TTL)        | How long a response must be cached (min value). If <=0, use response's TTL, if >0 use this value, if TTL is smaller |
-| caching.maxTime               | duration format | no        | 0 (use TTL)        | How long a response must be cached (max value). If <0, do not cache responses. If 0, use TTL. If > 0, use this value, if TTL is greater |
-| caching.maxItemsCount         | int             | no        | 0 (unlimited)      | Max number of cache entries (responses) to be kept in cache (soft limit). Default (0): unlimited. Useful on systems with limited amount of RAM. |
-| caching.prefetching           | bool            | no        | false              | if true, blocky will preload DNS results for often used queries (default: names queried more than 5 times in a 2 hour time window). Results in cache will be loaded again on their expire (TTL). This improves the response time for often used queries, but significantly increases external traffic. It is recommended to increase "minTime" to reduce the number of prefetch queries to external resolvers. |
-| caching.prefetchExpires       | duration format | no        | 2h                 | Prefetch track time window |
-| caching.prefetchThreshold     | int             | no        | 5                  | Name queries threshold for prefetch
-| caching.prefetchMaxItemsCount | int             | no        | 0 (unlimited)      | Max number of domains to be kept in cache for prefetching (soft limit). Default (0): unlimited. Useful on systems with limited amount of RAM. |
-| caching.cacheTimeNegative     | duration format | no        | 30m                | Time how long negative results are cached. A value of -1 will disable caching for negative results. |
+| Parameter                     | Type            | Mandatory | Default value | Description                                                                                                                                                                                                                                                                                                                                                                                                    |
+|-------------------------------|-----------------|-----------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| caching.minTime               | duration format | no        | 0 (use TTL)   | How long a response must be cached (min value). If <=0, use response's TTL, if >0 use this value, if TTL is smaller                                                                                                                                                                                                                                                                                            |
+| caching.maxTime               | duration format | no        | 0 (use TTL)   | How long a response must be cached (max value). If <0, do not cache responses. If 0, use TTL. If > 0, use this value, if TTL is greater                                                                                                                                                                                                                                                                        |
+| caching.maxItemsCount         | int             | no        | 0 (unlimited) | Max number of cache entries (responses) to be kept in cache (soft limit). Default (0): unlimited. Useful on systems with limited amount of RAM.                                                                                                                                                                                                                                                                |
+| caching.prefetching           | bool            | no        | false         | if true, blocky will preload DNS results for often used queries (default: names queried more than 5 times in a 2 hour time window). Results in cache will be loaded again on their expire (TTL). This improves the response time for often used queries, but significantly increases external traffic. It is recommended to increase "minTime" to reduce the number of prefetch queries to external resolvers. |
+| caching.prefetchExpires       | duration format | no        | 2h            | Prefetch track time window                                                                                                                                                                                                                                                                                                                                                                                     |
+| caching.prefetchThreshold     | int             | no        | 5             | Name queries threshold for prefetch                                                                                                                                                                                                                                                                                                                                                                            |
+| caching.prefetchMaxItemsCount | int             | no        | 0 (unlimited) | Max number of domains to be kept in cache for prefetching (soft limit). Default (0): unlimited. Useful on systems with limited amount of RAM.                                                                                                                                                                                                                                                                  |
+| caching.cacheTimeNegative     | duration format | no        | 30m           | Time how long negative results are cached. A value of -1 will disable caching for negative results.                                                                                                                                                                                                                                                                                                            |
 
 !!! example
 
     ```yaml
     caching:
-      minTime: 5m
-      maxTime: 30m
-      prefetching: true
+        minTime: 5m
+        maxTime: 30m
+        prefetching: true
+    ```
+
+## Redis
+
+Blocky can synchronize its cache and blocking state between multiple instances through redis.
+Synchronization is disabled if no address is configured.
+
+| Parameter                | Type            | Mandatory | Default value | Description                                |
+|--------------------------|-----------------|-----------|---------------|--------------------------------------------|
+| redis.address            | string          | no        |               | Server address and port                    |
+| redis.password           | string          | no        |               | Password if necessary                      |
+| redis.database           | int             | no        | 0             | Database                                   |
+| redis.required           | bool            | no        | false         | Connection is required for blocky to start |
+| redis.connectionAttempts | int             | no        | 3             | Max connection attempts                    |
+| redis.connectionCooldown | duration format | no        | 1s            | Time between the connection attempts       |
+
+!!! example
+
+    ```yaml
+    redis:
+        address: redis:6379
+        password: passwd
+        database: 2
+        required: true
+        connectionAttempts: 10
+        connectionCooldown: 3s
     ```
 
 ## Prometheus
@@ -414,17 +457,17 @@ With following parameters you can tune the caching behavior:
 Blocky can expose various metrics for prometheus. To use the prometheus feature, the HTTP listener must be enabled (
 see [Basic Configuration](#basic-configuration)).
 
-| Parameter       | Mandatory | Default value      | Description                                       |
-| --------------- | --------- | -------------------| ------------------------------------------------- |
-| prometheus.enable | no      | false              |  If true, enables prometheus metrics              |
-| prometheus.path |   no      | /metrics           |  URL path to the metrics endpoint                 |
+| Parameter         | Mandatory | Default value | Description                         |
+|-------------------|-----------|---------------|-------------------------------------|
+| prometheus.enable | no        | false         | If true, enables prometheus metrics |
+| prometheus.path   | no        | /metrics      | URL path to the metrics endpoint    |
 
 !!! example
 
     ```yaml
     prometheus:
-      enable: true
-      path: /metrics
+        enable: true
+        path: /metrics
     ```
 
 ## Query logging
@@ -441,6 +484,7 @@ in Excel or OpenOffice Calc) or MySQL/MariaDB database.
 You can select one of following query log types:
 
 - `mysql` - log each query in the external MySQL/MariaDB database
+- `postgresql` - log each query in the external PostgreSQL database
 - `csv` - log into CSV file (one per day)
 - `csv-client` - log into CSV file (one per day and per client)
 - `console` - log into console output
@@ -448,11 +492,13 @@ You can select one of following query log types:
 
 Configuration parameters:
 
-| Parameter                | Type                                                     | Mandatory | Default value      | Description                                                                 |
-| ---------------------    | -------------------------------------------------------- | --------- | ------------------ | --------------------------------------------------------------------------- |
-| queryLog.type            | enum (mysql, csv, csv-client, console, none (see above)) | no        |                    |  Type of logging target. Console if empty                                   |
-| queryLog.target          | string                                                   | no        |                    |  directory for writing the logs (for csv) or database url (for mysql)       |
-| queryLog.logRetentionDays| int                                                      | no        | 0                  |  if > 0, deletes log files/database entries which are older than ... days   |
+| Parameter                 | Type                                                                 | Mandatory | Default value | Description                                                                            |
+|---------------------------|----------------------------------------------------------------------|-----------|---------------|----------------------------------------------------------------------------------------|
+| queryLog.type             | enum (mysql, postgresql, csv, csv-client, console, none (see above)) | no        |               | Type of logging target. Console if empty                                               |
+| queryLog.target           | string                                                               | no        |               | directory for writing the logs (for csv) or database url (for mysql or postgresql)     |
+| queryLog.logRetentionDays | int                                                                  | no        | 0             | if > 0, deletes log files/database entries which are older than ... days               |
+| queryLog.creationAttempts | int                                                                  | no        | 3             | Max attempts to create specific query log writer                                       |
+| queryLog.CreationCooldown | duration format                                                      | no        | 2             | Time between the creation attempts                                                     |
 
 !!! hint
 
@@ -477,6 +523,27 @@ example for Database
         type: mysql
         target: db_user:db_password@tcp(db_host_or_ip:3306)/db_user?charset=utf8mb4&parseTime=True&loc=Local
         logRetentionDays: 7
+    ```
+
+### Hosts file
+
+You can enable resolving of entries, located in local hosts file.
+
+Configuration parameters:
+
+| Parameter                | Type                           | Mandatory | Default value | Description                                   |
+|--------------------------|--------------------------------|-----------|---------------|-----------------------------------------------|
+| hostsFile.filePath       | string                         | no        |               | Path to hosts file (e.g. /etc/hosts on Linux) |
+| hostsFile.hostsTTL       | duration (no units is minutes) | no        | 1h            | TTL                                           |
+| hostsFile.refreshPeriod  | duration format                | no        | 1h            | Time between hosts file refresh               |
+
+!!! example
+
+    ```yaml
+    hostsFile:
+        filePath: /etc/hosts
+        hostsTTL: 60m
+        refreshPeriod: 30m
     ```
 
 ## SSL certificate configuration (DoH / TLS listener)

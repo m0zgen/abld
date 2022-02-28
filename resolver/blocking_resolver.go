@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0xERR0R/blocky/cache/expirationcache"
+
 	"github.com/hashicorp/go-multierror"
 
 	"github.com/0xERR0R/blocky/api"
@@ -15,6 +17,7 @@ import (
 	"github.com/0xERR0R/blocky/lists"
 	"github.com/0xERR0R/blocky/log"
 	"github.com/0xERR0R/blocky/model"
+	"github.com/0xERR0R/blocky/redis"
 	"github.com/0xERR0R/blocky/util"
 
 	"github.com/miekg/dns"
@@ -80,10 +83,13 @@ type BlockingResolver struct {
 	whitelistOnlyGroups map[string]bool
 	status              *status
 	clientGroupsBlock   map[string][]string
+	redisClient         *redis.Client
+	redisEnabled        bool
+	fqdnIPCache         expirationcache.ExpiringCache
 }
 
 // NewBlockingResolver returns a new configured instance of the resolver
-func NewBlockingResolver(cfg config.BlockingConfig) (ChainedResolver, error) {
+func NewBlockingResolver(cfg config.BlockingConfig, redis *redis.Client) (ChainedResolver, error) {
 	blockHandler := createBlockHandler(cfg)
 	refreshPeriod := time.Duration(cfg.RefreshPeriod)
 	timeout := time.Duration(cfg.DownloadTimeout)
@@ -131,9 +137,40 @@ func NewBlockingResolver(cfg config.BlockingConfig) (ChainedResolver, error) {
 			enableTimer: time.NewTimer(0),
 		},
 		clientGroupsBlock: cgb,
+		redisClient:       redis,
+		redisEnabled:      (redis != nil),
 	}
 
+	if res.redisEnabled {
+		setupRedisEnabledSubscriber(res)
+	}
+
+	_ = evt.Bus().Subscribe(evt.ApplicationStarted, func(_ ...string) {
+		go res.initFQDNIPCache()
+	})
+
 	return res, nil
+}
+
+func setupRedisEnabledSubscriber(c *BlockingResolver) {
+	logger := logger("blocking_resolver")
+
+	go func() {
+		for em := range c.redisClient.EnabledChannel {
+			if em != nil {
+				logger.Debug("Received state from redis: ", em)
+
+				if em.State {
+					c.internalEnableBlocking()
+				} else {
+					err := c.internalDisableBlocking(em.Duration, em.Groups)
+					if err != nil {
+						logger.Warn("Blocking couldn't be disabled:", err)
+					}
+				}
+			}
+		}
+	}()
 }
 
 // RefreshLists triggers the refresh of all black and white lists in the cache
@@ -163,6 +200,14 @@ func (r *BlockingResolver) retrieveAllBlockingGroups() []string {
 
 // EnableBlocking enables the blocking against the blacklists
 func (r *BlockingResolver) EnableBlocking() {
+	r.internalEnableBlocking()
+
+	if r.redisEnabled {
+		r.redisClient.PublishEnabled(&redis.EnabledMessage{State: true})
+	}
+}
+
+func (r *BlockingResolver) internalEnableBlocking() {
 	s := r.status
 	s.enableTimer.Stop()
 	s.enabled = true
@@ -173,6 +218,19 @@ func (r *BlockingResolver) EnableBlocking() {
 
 // DisableBlocking deactivates the blocking for a particular duration (or forever if 0).
 func (r *BlockingResolver) DisableBlocking(duration time.Duration, disableGroups []string) error {
+	err := r.internalDisableBlocking(duration, disableGroups)
+	if err == nil && r.redisEnabled {
+		r.redisClient.PublishEnabled(&redis.EnabledMessage{
+			State:    false,
+			Duration: duration,
+			Groups:   disableGroups,
+		})
+	}
+
+	return err
+}
+
+func (r *BlockingResolver) internalDisableBlocking(duration time.Duration, disableGroups []string) error {
 	s := r.status
 	s.enableTimer.Stop()
 	s.enabled = false
@@ -195,9 +253,10 @@ func (r *BlockingResolver) DisableBlocking(duration time.Duration, disableGroups
 	s.disableEnd = time.Now().Add(duration)
 
 	if duration == 0 {
-		log.Log().Infof("disable blocking for group(s) '%s'", strings.Join(s.disabledGroups, "; "))
+		log.Log().Infof("disable blocking for group(s) '%s'", log.EscapeInput(strings.Join(s.disabledGroups, "; ")))
 	} else {
-		log.Log().Infof("disable blocking for %s for group(s) '%s'", duration, strings.Join(s.disabledGroups, "; "))
+		log.Log().Infof("disable blocking for %s for group(s) '%s'", duration,
+			log.EscapeInput(strings.Join(s.disabledGroups, "; ")))
 		s.enableTimer = time.AfterFunc(duration, func() {
 			r.EnableBlocking()
 			log.Log().Info("blocking enabled again")
@@ -397,10 +456,20 @@ func (r *BlockingResolver) groupsToCheckForClient(request *model.Request) []stri
 		groups = append(groups, groupsByIP...)
 	}
 
-	// try CIDR
-	for cidr, groupsByCidr := range r.clientGroupsBlock {
-		if util.CidrContainsIP(cidr, request.ClientIP) {
+	for clientIdentifier, groupsByCidr := range r.clientGroupsBlock {
+		// try CIDR
+		if util.CidrContainsIP(clientIdentifier, request.ClientIP) {
 			groups = append(groups, groupsByCidr...)
+		} else if isFQDN(clientIdentifier) && r.fqdnIPCache != nil {
+			clIps, _ := r.fqdnIPCache.Get(clientIdentifier)
+			if clIps != nil {
+				ips := clIps.([]net.IP)
+				for _, ip := range ips {
+					if ip.Equal(request.ClientIP) {
+						groups = append(groups, groupsByCidr...)
+					}
+				}
+			}
 		}
 	}
 
@@ -486,4 +555,56 @@ func (b ipBlockHandler) handleBlock(question dns.Question, response *dns.Msg) {
 		// use fallback
 		b.fallbackHandler.handleBlock(question, response)
 	}
+}
+
+func (r *BlockingResolver) queryForFQIdentifierIPs(identifier string) (result []net.IP, ttl time.Duration) {
+	for _, mType := range []uint16{dns.TypeA, dns.TypeAAAA} {
+		prefixedLog := log.PrefixedLog("FQDNClientIdentifierCache")
+		resp, err := r.next.Resolve(&model.Request{
+			Req: util.NewMsgWithQuestion(identifier, mType),
+			Log: prefixedLog,
+		})
+
+		if err == nil && resp.Res.Rcode == dns.RcodeSuccess {
+			for _, rr := range resp.Res.Answer {
+				ttl = time.Duration(rr.Header().Ttl) * time.Second
+
+				switch v := rr.(type) {
+				case *dns.A:
+					result = append(result, v.A)
+				case *dns.AAAA:
+					result = append(result, v.AAAA)
+				}
+			}
+
+			prefixedLog.Debugf("resolved IPs '%v' for fq identifier '%s'", result, identifier)
+		}
+	}
+
+	return
+}
+
+func (r *BlockingResolver) initFQDNIPCache() {
+	identifiers := make([]string, 0)
+
+	for identifier := range r.clientGroupsBlock {
+		identifiers = append(identifiers, identifier)
+	}
+
+	r.fqdnIPCache = expirationcache.NewCache(expirationcache.WithCleanUpInterval(5*time.Second),
+		expirationcache.WithOnExpiredFn(func(key string) (val interface{}, ttl time.Duration) {
+			return r.queryForFQIdentifierIPs(key)
+		}))
+
+	for _, identifier := range identifiers {
+		if isFQDN(identifier) {
+			iPs, ttl := r.queryForFQIdentifierIPs(identifier)
+			r.fqdnIPCache.Put(identifier, iPs, ttl)
+		}
+	}
+}
+
+func isFQDN(in string) bool {
+	s := strings.Trim(in, ".")
+	return strings.Contains(s, ".")
 }
