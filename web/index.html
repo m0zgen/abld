@@ -31,24 +31,35 @@
           </div>
         </div>
       </nav>
+
       <div class="container pt-5">
         <div class="columns is-multiline is-centered mb-6">
           <div class="column is-8 is-6-desktop">
             <div class="has-text-centered">
               <span class="has-text-grey-dark">Focus on information for free</span>
               <h2 class="mt-3 mb-5 is-size-2 is-size-3-mobile has-text-weight-bold">
-                Web without tracking, advertising, malware and etc with<br />
-                Blocky Listener Daemon<br/>
-<!--                    from <a href="https://sys-adm.in" target="_blank">Sys-Adm.in-->
-              </a>
+                Web without tracking, advertising, malware and etc with<br />Blocky Listener Daemon (BLD)
               </h2>
-              <p class="subtitle">You can use BLD as:</p>
-              <p>DoH (in browsers):<code>https://bld.sys-adm.in:8443/dns-query</code></p>
+              <p>DoH (in browsers):<code>https://bld.sys-adm.in/dns-query</code></p>
+              <p>or DoH (in browsers):<code>https://bld.sys-adm.in:8443/dns-query</code></p>
               <p>DoT (as private DNS in Android):<code>bld.sys-adm.in</code></p>
               <p>DNS (any IP from):<code>nslookup bld.sys-adm.in</code></p>
             </div>
           </div>
         </div>
+
+        <div class="container">
+          <div class="columns is-multiline is-centered mb-6">
+            <div class="column is-8 is-6-desktop">
+              <div class="has-text-centered">
+                <a class="button is-primary is-medium is-center" href="https://github.com/m0zgen/blocky-listener-daemon/wiki" target="_blank">
+                  How to setup
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="columns is-multiline">
           <div class="column is-4 mb-5 is-flex">
             <div class="mr-4">
@@ -88,29 +99,31 @@
           </div>
         </div>
 
-        <div class="columns is-multiline">
-          <div class="column is-5">
-            <div class="container has-text-right">
-              <a class="mx-auto mb-4 is-inline-block" href="https://ko-fi.com/sysadminkz" target="_blank">
-                <img class="image" src="https://cdn.blahdns.com/kofi4.png" alt="" width="196px">
-              </a>
+        <div class="container">
+          <div class="columns is-multiline is-centered">
+            <div class="column is-8 is-6-desktop">
+              <div class="has-text-centered">
+                <img class="image is-fullwidth" src="https://lab.sys-adm.in/images/site-cover-bld-light.png" alt="">
 
-            </div>
-          </div>
-          <div class="column is-2 is-vcentered">
-            <div class="container has-text-centered">
-              <br>
-              -OR-
-            </div>
-          </div>
-          <div class="column is-5">
-            <div class="container has-text-left">
-              <a class="button  is-medium is-info mx-auto mb-4 is-inline-block" href="http://paypal.me/m0zgen" target="_blank">
-                Donate with PayPal
-              </a>
+              </div>
             </div>
           </div>
         </div>
+
+        <div class="container">
+          <div class="columns is-multiline is-centered mb-6">
+            <div class="column is-8 is-6-desktop">
+              <div class="has-text-centered">
+                <h2 class="mt-3 mb-5 is-size-4 is-size-3-mobile">
+                  It is a <strong class="has-text-success">OPEN</strong> BLD DNS service, you can support this
+                  with <a href="https://www.paypal.com/paypalme/m0zgen" target="_blank">PayPal</a> or differents methods which
+                  contains on official BLD project: <br> <a href="https://lab.sys-adm.in/" target="_blank">Sys-Admin Lab</a> site.
+                </h2>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </section>
 
@@ -124,11 +137,7 @@
               <li class="mr-4"><a class="button is-white" href="{{.URL}}" target="_blank">{{.Title}}</a></li>
         {{end}}
       </ul>
-      <!-- <div>
-        <a class="mr-4 is-inline-block" href="#">
-          <img src="bulma-plain-assets/socials/github.svg">
-        </a>
-      </div> -->
+
     </div>
     <div class="pt-5" style="border-top: 1px solid #dee2e6;"></div>
     <div class="container">
