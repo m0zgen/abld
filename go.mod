@@ -13,7 +13,7 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
-	github.com/miekg/dns v1.1.46
+	github.com/miekg/dns v1.1.47
 	github.com/mroth/weightedrand v0.4.1
 	github.com/onsi/ginkgo v1.16.5 // indirect
 	github.com/onsi/gomega v1.18.1
@@ -26,7 +26,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 	gorm.io/driver/mysql v1.3.2
 	gorm.io/driver/sqlite v1.3.1
-	gorm.io/gorm v1.23.1
+	gorm.io/gorm v1.23.2
 )
 
 require (
