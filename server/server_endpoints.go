@@ -235,11 +235,6 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 			Title string
 		}
 
-		swaggerVersion := "master"
-		if util.Version != "undefined" {
-			swaggerVersion = util.Version
-		}
-
 		type PageData struct {
 			Links     []HandlerLink
 			Version   string
