@@ -51,7 +51,7 @@ Based on [Blocky](https://github.com/0xERR0R/blocky).
     * Supports modern DNS extensions: DNSSEC, eDNS, ...
     * Free configurable blocking lists - no hidden filtering etc.
     * Provides DoH Endpoint
-    * Uses random upstream resolvers from the configuration - increases you privacy though the distribution of your DNS
+    * Uses random upstream resolvers from the configuration - increases your privacy through the distribution of your DNS
     traffic over multiple provider
     * Blocky does **NOT** collect any user data, telemetry, statistics etc.
 

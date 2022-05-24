@@ -18,10 +18,15 @@ import (
 	"github.com/0xERR0R/blocky/redis"
 	"github.com/0xERR0R/blocky/resolver"
 	"github.com/0xERR0R/blocky/util"
+	"github.com/hashicorp/go-multierror"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
+)
+
+const (
+	maxUDPBufferSize = 65535
 )
 
 // Server controls the endpoints for DNS and HTTP
@@ -38,6 +43,19 @@ func logger() *logrus.Entry {
 	return log.PrefixedLog("server")
 }
 
+func tlsCipherSuites() []uint16 {
+	tlsCipherSuites := []uint16{
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+		tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+	}
+
+	return tlsCipherSuites
+}
+
 func getServerAddress(addr string) string {
 	if !strings.Contains(addr, ":") {
 		addr = fmt.Sprintf(":%s", addr)
@@ -46,26 +64,16 @@ func getServerAddress(addr string) string {
 	return addr
 }
 
-type NewServerFunc func(address string) *dns.Server
+type NewServerFunc func(address string) (*dns.Server, error)
 
 // NewServer creates new server instance with passed config
 func NewServer(cfg *config.Config) (server *Server, err error) {
-	var dnsServers []*dns.Server
-
 	log.ConfigureLogger(cfg.LogLevel, cfg.LogFormat, cfg.LogTimestamp)
 
-	addServers := func(newServer NewServerFunc, addresses config.ListenConfig) {
-		for _, address := range addresses {
-			dnsServers = append(dnsServers, newServer(getServerAddress(address)))
-		}
+	dnsServers, err := createServers(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("server creation failed: %w", err)
 	}
-
-	addServers(createUDPServer, cfg.DNSPorts)
-	addServers(createTCPServer, cfg.DNSPorts)
-
-	addServers(func(address string) *dns.Server {
-		return createTLSServer(address, cfg.CertFile, cfg.KeyFile)
-	}, cfg.TLSPorts)
 
 	router := createRouter(cfg)
 
@@ -80,12 +88,17 @@ func NewServer(cfg *config.Config) (server *Server, err error) {
 
 	metrics.RegisterEventListeners()
 
+	bootstrap, err := resolver.NewBootstrap(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	redisClient, redisErr := redis.New(&cfg.Redis)
 	if redisErr != nil && cfg.Redis.Required {
 		return nil, redisErr
 	}
 
-	queryResolver, queryError := createQueryResolver(cfg, redisClient)
+	queryResolver, queryError := createQueryResolver(cfg, bootstrap, redisClient)
 	if queryError != nil {
 		return nil, queryError
 	}
@@ -107,6 +120,34 @@ func NewServer(cfg *config.Config) (server *Server, err error) {
 	registerResolverAPIEndpoints(router, queryResolver)
 
 	return server, err
+}
+
+func createServers(cfg *config.Config) ([]*dns.Server, error) {
+	var dnsServers []*dns.Server
+
+	var err *multierror.Error
+
+	addServers := func(newServer NewServerFunc, addresses config.ListenConfig) error {
+		for _, address := range addresses {
+			server, err := newServer(getServerAddress(address))
+			if err != nil {
+				return err
+			}
+
+			dnsServers = append(dnsServers, server)
+		}
+
+		return nil
+	}
+
+	err = multierror.Append(err,
+		addServers(createUDPServer, cfg.DNSPorts),
+		addServers(createTCPServer, cfg.DNSPorts),
+		addServers(func(address string) (*dns.Server, error) {
+			return createTLSServer(address, cfg.CertFile, cfg.KeyFile)
+		}, cfg.TLSPorts))
+
+	return dnsServers, err.ErrorOrNil()
 }
 
 func createHTTPListeners(cfg *config.Config) (httpListeners []net.Listener, httpsListeners []net.Listener, err error) {
@@ -150,9 +191,11 @@ func registerResolverAPIEndpoints(router chi.Router, res resolver.Resolver) {
 	}
 }
 
-func createTLSServer(address string, certFile string, keyFile string) *dns.Server {
+func createTLSServer(address string, certFile string, keyFile string) (*dns.Server, error) {
 	cer, err := tls.LoadX509KeyPair(certFile, keyFile)
-	util.FatalOnError("can't load certificate files: ", err)
+	if err != nil {
+		return nil, fmt.Errorf("can't load certificate files: %w", err)
+	}
 
 	return &dns.Server{
 		Addr: address,
@@ -160,15 +203,16 @@ func createTLSServer(address string, certFile string, keyFile string) *dns.Serve
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cer},
 			MinVersion:   tls.VersionTLS12,
+			CipherSuites: tlsCipherSuites(),
 		},
 		Handler: dns.NewServeMux(),
 		NotifyStartedFunc: func() {
 			logger().Infof("TLS server is up and running on address %s", address)
 		},
-	}
+	}, nil
 }
 
-func createTCPServer(address string) *dns.Server {
+func createTCPServer(address string) (*dns.Server, error) {
 	return &dns.Server{
 		Addr:    address,
 		Net:     "tcp",
@@ -176,10 +220,10 @@ func createTCPServer(address string) *dns.Server {
 		NotifyStartedFunc: func() {
 			logger().Infof("TCP server is up and running on address %s", address)
 		},
-	}
+	}, nil
 }
 
-func createUDPServer(address string) *dns.Server {
+func createUDPServer(address string) (*dns.Server, error) {
 	return &dns.Server{
 		Addr:    address,
 		Net:     "udp",
@@ -187,24 +231,44 @@ func createUDPServer(address string) *dns.Server {
 		NotifyStartedFunc: func() {
 			logger().Infof("UDP server is up and running on address %s", address)
 		},
-		UDPSize: 65535}
+		UDPSize: maxUDPBufferSize,
+	}, nil
 }
 
-func createQueryResolver(cfg *config.Config, redisClient *redis.Client) (resolver.Resolver, error) {
-	br, brErr := resolver.NewBlockingResolver(cfg.Blocking, redisClient)
+func createQueryResolver(
+	cfg *config.Config,
+	bootstrap *resolver.Bootstrap,
+	redisClient *redis.Client,
+) (r resolver.Resolver, err error) {
+	blockingResolver, blErr := resolver.NewBlockingResolver(cfg.Blocking, redisClient, bootstrap)
+	parallelResolver, pErr := resolver.NewParallelBestResolver(cfg.Upstream.ExternalResolvers, bootstrap)
+	clientNamesResolver, cnErr := resolver.NewClientNamesResolver(cfg.ClientLookup, bootstrap)
+	conditionalUpstreamResolver, cuErr := resolver.NewConditionalUpstreamResolver(cfg.Conditional, bootstrap)
 
-	return resolver.Chain(
-		resolver.NewIPv6Checker(cfg.DisableIPv6),
-		resolver.NewClientNamesResolver(cfg.ClientLookup),
+	mErr := multierror.Append(
+		multierror.Prefix(blErr, "blocking resolver: "),
+		multierror.Prefix(pErr, "parallel resolver: "),
+		multierror.Prefix(cnErr, "client names resolver: "),
+		multierror.Prefix(cuErr, "conditional upstream resolver: "),
+	)
+	if mErr.ErrorOrNil() != nil {
+		return nil, mErr
+	}
+
+	r = resolver.Chain(
+		resolver.NewFilteringResolver(cfg.Filtering),
+		clientNamesResolver,
 		resolver.NewQueryLoggingResolver(cfg.QueryLog),
 		resolver.NewMetricsResolver(cfg.Prometheus),
-		resolver.NewCustomDNSResolver(cfg.CustomDNS),
+		resolver.NewRewriterResolver(cfg.CustomDNS.RewriteConfig, resolver.NewCustomDNSResolver(cfg.CustomDNS)),
 		resolver.NewHostsFileResolver(cfg.HostsFile),
-		br,
+		blockingResolver,
 		resolver.NewCachingResolver(cfg.Caching, redisClient),
-		resolver.NewConditionalUpstreamResolver(cfg.Conditional),
-		resolver.NewParallelBestResolver(cfg.Upstream.ExternalResolvers),
-	), brErr
+		resolver.NewRewriterResolver(cfg.Conditional.RewriteConfig, conditionalUpstreamResolver),
+		parallelResolver,
+	)
+
+	return r, nil
 }
 
 func (s *Server) registerDNSHandlers() {
@@ -258,11 +322,13 @@ func (s *Server) printConfiguration() {
 }
 
 func toMB(b uint64) uint64 {
-	return b / 1024 / 1024
+	const bytesInKB = 1024
+
+	return b / bytesInKB / bytesInKB
 }
 
 // Start starts the server
-func (s *Server) Start() {
+func (s *Server) Start(errCh chan<- error) {
 	logger().Info("Starting server")
 
 	for _, srv := range s.dnsServers {
@@ -270,7 +336,7 @@ func (s *Server) Start() {
 
 		go func() {
 			if err := srv.ListenAndServe(); err != nil {
-				logger().Fatalf("start %s listener failed: %v", srv.Net, err)
+				errCh <- fmt.Errorf("start %s listener failed: %w", srv.Net, err)
 			}
 		}()
 	}
@@ -282,8 +348,9 @@ func (s *Server) Start() {
 		go func() {
 			logger().Infof("http server is up and running on addr/port %s", address)
 
-			err := http.Serve(listener, s.httpMux)
-			util.FatalOnError("start http listener failed: ", err)
+			if err := http.Serve(listener, s.httpMux); err != nil {
+				errCh <- fmt.Errorf("start http listener failed: %w", err)
+			}
 		}()
 	}
 
@@ -294,8 +361,17 @@ func (s *Server) Start() {
 		go func() {
 			logger().Infof("https server is up and running on addr/port %s", address)
 
-			err := http.ServeTLS(listener, s.httpMux, s.cfg.CertFile, s.cfg.KeyFile)
-			util.FatalOnError("start https listener failed: ", err)
+			server := http.Server{
+				Handler: s.httpMux,
+				TLSConfig: &tls.Config{
+					MinVersion:   tls.VersionTLS12,
+					CipherSuites: tlsCipherSuites(),
+				},
+			}
+
+			if err := server.ServeTLS(listener, s.cfg.CertFile, s.cfg.KeyFile); err != nil {
+				errCh <- fmt.Errorf("start https listener failed: %w", err)
+			}
 		}()
 	}
 
@@ -303,14 +379,16 @@ func (s *Server) Start() {
 }
 
 // Stop stops the server
-func (s *Server) Stop() {
+func (s *Server) Stop() error {
 	logger().Info("Stopping server")
 
 	for _, server := range s.dnsServers {
 		if err := server.Shutdown(); err != nil {
-			logger().Fatalf("stop %s listener failed: %v", server.Net, err)
+			return fmt.Errorf("stop %s listener failed: %w", server.Net, err)
 		}
 	}
+
+	return nil
 }
 
 func createResolverRequest(rw dns.ResponseWriter, request *dns.Msg) *model.Request {
@@ -365,7 +443,7 @@ func (s *Server) OnRequest(w dns.ResponseWriter, request *dns.Msg) {
 	response, err := s.queryResolver.Resolve(r)
 
 	if err != nil {
-		logger().Errorf("error on processing request: %v", err)
+		logger().Error("error on processing request:", err)
 
 		m := new(dns.Msg)
 		m.SetRcode(request, dns.RcodeServerFailure)
@@ -385,7 +463,7 @@ func (s *Server) OnRequest(w dns.ResponseWriter, request *dns.Msg) {
 	}
 }
 
-// returns EDNS upd size or if not present, 512 for UDP and 64K for TCP
+// returns EDNS UDP size or if not present, 512 for UDP and 64K for TCP
 func getMaxResponseSize(network string, request *dns.Msg) int {
 	edns := request.IsEdns0()
 	if edns != nil && edns.UDPSize() > 0 {

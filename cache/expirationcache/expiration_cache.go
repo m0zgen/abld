@@ -117,18 +117,11 @@ func (e *ExpiringLRUCache) Put(key string, val interface{}, ttl time.Duration) {
 
 	expiresEpochMs := time.Now().UnixMilli() + ttl.Milliseconds()
 
-	el, found := e.lru.Get(key)
-	if found {
-		// update existing item
-		el.(*element).val = val
-		el.(*element).expiresEpochMs = expiresEpochMs
-	} else {
-		// add new item
-		e.lru.Add(key, &element{
-			val:            val,
-			expiresEpochMs: expiresEpochMs,
-		})
-	}
+	// add new item
+	e.lru.Add(key, &element{
+		val:            val,
+		expiresEpochMs: expiresEpochMs,
+	})
 }
 
 func (e *ExpiringLRUCache) Get(key string) (val interface{}, ttl time.Duration) {
@@ -146,8 +139,7 @@ func isExpired(el *element) bool {
 }
 
 func calculateRemainTTL(expiresEpoch int64) time.Duration {
-	now := time.Now().UnixMilli()
-	if now < expiresEpoch {
+	if now := time.Now().UnixMilli(); now < expiresEpoch {
 		return time.Duration(expiresEpoch-now) * time.Millisecond
 	}
 
