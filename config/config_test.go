@@ -24,36 +24,27 @@ var _ = Describe("Config", func() {
 				_, err = LoadConfig("config.yml", true)
 				Expect(err).Should(Succeed())
 
-				Expect(config.DNSPorts).Should(Equal(ListenConfig{"55553", ":55554", "[::1]:55555"}))
-				Expect(config.Upstream.ExternalResolvers["default"]).Should(HaveLen(3))
-				Expect(config.Upstream.ExternalResolvers["default"][0].Host).Should(Equal("8.8.8.8"))
-				Expect(config.Upstream.ExternalResolvers["default"][1].Host).Should(Equal("8.8.4.4"))
-				Expect(config.Upstream.ExternalResolvers["default"][2].Host).Should(Equal("1.1.1.1"))
-				Expect(config.CustomDNS.Mapping.HostIPs).Should(HaveLen(2))
-				Expect(config.CustomDNS.Mapping.HostIPs["my.duckdns.org"][0]).Should(Equal(net.ParseIP("192.168.178.3")))
-				Expect(config.CustomDNS.Mapping.HostIPs["multiple.ips"][0]).Should(Equal(net.ParseIP("192.168.178.3")))
-				Expect(config.CustomDNS.Mapping.HostIPs["multiple.ips"][1]).Should(Equal(net.ParseIP("192.168.178.4")))
-				Expect(config.CustomDNS.Mapping.HostIPs["multiple.ips"][2]).Should(Equal(
-					net.ParseIP("2001:0db8:85a3:08d3:1319:8a2e:0370:7344")))
-				Expect(config.Conditional.Mapping.Upstreams).Should(HaveLen(2))
-				Expect(config.Conditional.Mapping.Upstreams["fritz.box"]).Should(HaveLen(1))
-				Expect(config.Conditional.Mapping.Upstreams["multiple.resolvers"]).Should(HaveLen(2))
-				Expect(config.ClientLookup.Upstream.Host).Should(Equal("192.168.178.1"))
-				Expect(config.ClientLookup.SingleNameOrder).Should(Equal([]uint{2, 1}))
-				Expect(config.Blocking.BlackLists).Should(HaveLen(2))
-				Expect(config.Blocking.WhiteLists).Should(HaveLen(1))
-				Expect(config.Blocking.ClientGroupsBlock).Should(HaveLen(2))
-				Expect(config.Blocking.BlockTTL).Should(Equal(Duration(time.Minute)))
-				Expect(config.Blocking.RefreshPeriod).Should(Equal(Duration(2 * time.Hour)))
-				Expect(config.Filtering.QueryTypes).Should(HaveLen(2))
+				defaultTestFileConfig()
+			})
+		})
+		When("Test file does not exist", func() {
+			It("should fail", func() {
+				_, err := LoadConfig("../testdata/config-does-not-exist.yaml", true)
+				Expect(err).Should(Not(Succeed()))
+			})
+		})
+		When("Multiple config files are used", func() {
+			It("should return a valid config struct", func() {
+				_, err := LoadConfig("../testdata/config/", true)
+				Expect(err).Should(Succeed())
 
-				Expect(config.Caching.MaxCachingTime).Should(Equal(Duration(0)))
-				Expect(config.Caching.MinCachingTime).Should(Equal(Duration(0)))
-
-				Expect(config.DoHUserAgent).Should(Equal("testBlocky"))
-
-				Expect(GetConfig()).Should(Not(BeNil()))
-
+				defaultTestFileConfig()
+			})
+		})
+		When("Config folder does not exist", func() {
+			It("should fail", func() {
+				_, err := LoadConfig("../testdata/does-not-exist-config/", true)
+				Expect(err).Should(Not(Succeed()))
 			})
 		})
 		When("config file is malformed", func() {
@@ -170,75 +161,14 @@ bootstrapDns:
 			})
 		})
 
-		When("Validation fails", func() {
-			It("should return error", func() {
-				cfg := Config{}
-				data :=
-					`httpsPort: 443`
-				err := unmarshalConfig([]byte(data), &cfg)
-				Expect(err).Should(HaveOccurred())
-				Expect(err.Error()).Should(ContainSubstring("'certFile' and 'keyFile' parameters are mandatory for HTTPS"))
-			})
-		})
-
-		When("TlsPort is defined", func() {
-			It("certFile/keyFile must be set", func() {
-
-				By("certFile/keyFile not set", func() {
-					c := &Config{
-						TLSPorts: ListenConfig{"953"},
-					}
-					err := validateConfig(c)
-					Expect(err).Should(HaveOccurred())
-					Expect(err.Error()).Should(ContainSubstring("'certFile' and 'keyFile' parameters are mandatory for TLS"))
-				})
-
-				By("certFile/keyFile set", func() {
-					c := &Config{
-						TLSPorts: ListenConfig{"953"},
-						KeyFile:  "key",
-						CertFile: "cert",
-					}
-					err := validateConfig(c)
-					Expect(err).Should(Succeed())
-
-				})
-			})
-		})
-
 		When("Deprecated parameter 'disableIPv6' is set", func() {
 			It("should add 'AAAA' to filter.queryTypes", func() {
 				c := &Config{
 					DisableIPv6: true,
 				}
-				err := validateConfig(c)
-				Expect(err).Should(Succeed())
+				validateConfig(c)
 				Expect(c.Filtering.QueryTypes).Should(HaveKey(QType(dns.TypeAAAA)))
 				Expect(c.Filtering.QueryTypes.Contains(dns.Type(dns.TypeAAAA))).Should(BeTrue())
-			})
-		})
-
-		When("HttpsPort is defined", func() {
-			It("certFile/keyFile must be set", func() {
-
-				By("certFile/keyFile not set", func() {
-					c := &Config{
-						HTTPSPorts: ListenConfig{"443"},
-					}
-					err := validateConfig(c)
-					Expect(err).Should(HaveOccurred())
-					Expect(err.Error()).Should(ContainSubstring("'certFile' and 'keyFile' parameters are mandatory for HTTPS"))
-				})
-
-				By("certFile/keyFile set", func() {
-					c := &Config{
-						TLSPorts: ListenConfig{"443"},
-						KeyFile:  "key",
-						CertFile: "cert",
-					}
-					err := validateConfig(c)
-					Expect(err).Should(Succeed())
-				})
 			})
 		})
 
@@ -618,3 +548,36 @@ bootstrapDns:
 		})
 	})
 })
+
+func defaultTestFileConfig() {
+	Expect(config.DNSPorts).Should(Equal(ListenConfig{"55553", ":55554", "[::1]:55555"}))
+	Expect(config.Upstream.ExternalResolvers["default"]).Should(HaveLen(3))
+	Expect(config.Upstream.ExternalResolvers["default"][0].Host).Should(Equal("8.8.8.8"))
+	Expect(config.Upstream.ExternalResolvers["default"][1].Host).Should(Equal("8.8.4.4"))
+	Expect(config.Upstream.ExternalResolvers["default"][2].Host).Should(Equal("1.1.1.1"))
+	Expect(config.CustomDNS.Mapping.HostIPs).Should(HaveLen(2))
+	Expect(config.CustomDNS.Mapping.HostIPs["my.duckdns.org"][0]).Should(Equal(net.ParseIP("192.168.178.3")))
+	Expect(config.CustomDNS.Mapping.HostIPs["multiple.ips"][0]).Should(Equal(net.ParseIP("192.168.178.3")))
+	Expect(config.CustomDNS.Mapping.HostIPs["multiple.ips"][1]).Should(Equal(net.ParseIP("192.168.178.4")))
+	Expect(config.CustomDNS.Mapping.HostIPs["multiple.ips"][2]).Should(Equal(
+		net.ParseIP("2001:0db8:85a3:08d3:1319:8a2e:0370:7344")))
+	Expect(config.Conditional.Mapping.Upstreams).Should(HaveLen(2))
+	Expect(config.Conditional.Mapping.Upstreams["fritz.box"]).Should(HaveLen(1))
+	Expect(config.Conditional.Mapping.Upstreams["multiple.resolvers"]).Should(HaveLen(2))
+	Expect(config.ClientLookup.Upstream.Host).Should(Equal("192.168.178.1"))
+	Expect(config.ClientLookup.SingleNameOrder).Should(Equal([]uint{2, 1}))
+	Expect(config.Blocking.BlackLists).Should(HaveLen(2))
+	Expect(config.Blocking.WhiteLists).Should(HaveLen(1))
+	Expect(config.Blocking.ClientGroupsBlock).Should(HaveLen(2))
+	Expect(config.Blocking.BlockTTL).Should(Equal(Duration(time.Minute)))
+	Expect(config.Blocking.RefreshPeriod).Should(Equal(Duration(2 * time.Hour)))
+	Expect(config.Filtering.QueryTypes).Should(HaveLen(2))
+
+	Expect(config.Caching.MaxCachingTime).Should(Equal(Duration(0)))
+	Expect(config.Caching.MinCachingTime).Should(Equal(Duration(0)))
+
+	Expect(config.DoHUserAgent).Should(Equal("testBlocky"))
+	Expect(config.MinTLSServeVer).Should(Equal("1.3"))
+
+	Expect(GetConfig()).Should(Not(BeNil()))
+}

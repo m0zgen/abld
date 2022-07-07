@@ -63,7 +63,7 @@ Based on [Blocky](https://github.com/0xERR0R/blocky).
   * Various REST API endpoints
   * CLI tool
 
-- **Simple configuration** - single configuration file in YAML format
+- **Simple configuration** - single or multiple configuration files in YAML format
 
     * Simple to maintain
     * Simple to backup

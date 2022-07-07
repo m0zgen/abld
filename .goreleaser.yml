@@ -36,4 +36,5 @@ changelog:
   filters:
     exclude:
       - '^docs:'
+      - '^chore:'
       - '^test:'

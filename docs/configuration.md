@@ -17,13 +17,14 @@ configuration properties as [JSON](config.yml).
 | tlsPort      | [IP]:port[,[IP]:port]*          | no                    |               | Port(s) and optional bind ip address(es) to serve DoT DNS endpoint (DNS-over-TLS). If you wish to specify a specific IP, you can do so such as `192.168.0.1:853`. Example: `83`, `:853`, `127.0.0.1:853,[::1]:853`                                |
 | httpPort     | [IP]:port[,[IP]:port]*          | no                    |               | Port(s) and optional bind ip address(es) to serve HTTP used for prometheus metrics, pprof, REST API, DoH... If you wish to specify a specific IP, you can do so such as `192.168.0.1:4000`. Example: `4000`, `:4000`, `127.0.0.1:4000,[::1]:4000` |
 | httpsPort    | [IP]:port[,[IP]:port]*          | no                    |               | Port(s) and optional bind ip address(es) to serve HTTPS used for prometheus metrics, pprof, REST API, DoH... If you wish to specify a specific IP, you can do so such as `192.168.0.1:443`. Example: `443`, `:443`, `127.0.0.1:443,[::1]:443`     |
-| certFile     | path                            | yes, if httpsPort > 0 |               | Path to cert and key file for SSL encryption (DoH and DoT)                                                                                                                                                                                        |
-| keyFile      | path                            | yes, if httpsPort > 0 |               | Path to cert and key file for SSL encryption (DoH and DoT)
+| certFile     | path                            | no                    |               | Path to cert and key file for SSL encryption (DoH and DoT); if empty, self-signed certificate is generated                                               |
+| keyFile      | path                            | no                    |               | Path to cert and key file for SSL encryption (DoH and DoT); if empty, self-signed certificate is generated                                              |
 | logLevel     | enum (debug, info, warn, error) | no                    | info          | Log level                                                                                                                                                                                                                                         |
 | logFormat    | enum (text, json)               | no                    | text          | Log format (text or json).                                                                                                                                                                                                                        |
 | logTimestamp | bool                            | no                    | true          | Log time stamps (true or false).                                                                                                                                                                                                                  |
 | logPrivacy   | bool                            | no                    | false         | Obfuscate log output (replace all alphanumeric characters with *) for user sensitive data like request domains or responses to increase privacy.                                                                                                 |
 | dohUserAgent | string                          | no                    |               | HTTP User Agent for DoH upstreams                                                                                                  |
+| minTlsServeVersion | string                    | no                    | 1.2           | Minimum TLS version that the DoT and DoH server use to serve those encrypted DNS requests                       |
 
 !!! example
 
@@ -133,7 +134,6 @@ Works only on Linux/\*nix OS due to golang limitations under Windows.
           - 123.123.123.123
     ```
 
-
 ## Filtering
 
 Under certain circumstances, it may be useful to filter some types of DNS queries. You can define one or more DNS query
@@ -148,6 +148,18 @@ types, all queries with these types will be dropped (empty answer will be return
     ```
 
 This configuration will drop all 'AAAA' (IPv6) queries.
+
+## FQDN only
+
+In domain environments, it may be usefull to only response to FQDN requests. If this option is enabled blocky respond immidiatly
+with NXDOMAIN if the request is not a valid FQDN. The request is therfore not further processed by other options like custom or conditional.
+Please be aware that by enabling it your hostname resolution will break unless every hostname is part of a domain.
+
+!!! example
+
+    ```yaml
+    fqdnOnly: true
+    ```
 
 ## Custom DNS
 
@@ -185,7 +197,7 @@ The query "printer.home" will be rewritten to "printer.lan" and return 192.168.1
 
 With parameter `filterUnmappedTypes = true` (default), blocky will filter all queries with unmapped types, for example:
 AAAA for "printer.lan" or TXT for "otherdevice.lan".
-With `filterUnmappedTypes = true` a query AAAA "printer.lan" will be forwarded to the upstream DNS server.
+With `filterUnmappedTypes = false` a query AAAA "printer.lan" will be forwarded to the upstream DNS server.
 
 ## Conditional DNS resolution
 

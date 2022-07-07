@@ -53,10 +53,12 @@ type dnsUpstreamClient struct {
 
 type httpUpstreamClient struct {
 	client *http.Client
+	host   string
 }
 
 func createUpstreamClient(cfg config.Upstream) upstreamClient {
 	timeout := time.Duration(config.GetConfig().UpstreamTimeout)
+
 	tlsConfig := tls.Config{
 		ServerName: cfg.Host,
 		MinVersion: tls.VersionTLS12,
@@ -73,6 +75,7 @@ func createUpstreamClient(cfg config.Upstream) upstreamClient {
 				},
 				Timeout: timeout,
 			},
+			host: cfg.Host,
 		}
 
 	case config.NetProtocolTcpTls:
@@ -127,6 +130,8 @@ func (r *httpUpstreamClient) callExternal(msg *dns.Msg,
 
 	req.Header.Set("User-Agent", config.GetConfig().DoHUserAgent)
 	req.Header.Set("Content-Type", dnsContentType)
+	req.Host = r.host
+
 	httpResponse, err := r.client.Do(req)
 
 	if err != nil {
@@ -266,7 +271,7 @@ func (r *UpstreamResolver) Resolve(request *model.Request) (response *model.Resp
 		retry.RetryIf(func(err error) bool {
 			var netErr net.Error
 
-			return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+			return errors.As(err, &netErr) && netErr.Timeout()
 		}),
 		retry.OnRetry(func(n uint, err error) {
 			logger.WithFields(logrus.Fields{

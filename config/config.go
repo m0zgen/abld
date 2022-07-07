@@ -7,16 +7,17 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 
 	"github.com/hako/durafmt"
-	"github.com/hashicorp/go-multierror"
 
 	"github.com/0xERR0R/blocky/log"
 	"github.com/creasty/defaults"
@@ -418,12 +419,14 @@ type Config struct {
 	HTTPSPorts      ListenConfig              `yaml:"httpsPort"`
 	TLSPorts        ListenConfig              `yaml:"tlsPort"`
 	DoHUserAgent    string                    `yaml:"dohUserAgent"`
+	MinTLSServeVer  string                    `yaml:"minTlsServeVersion" default:"1.2"`
 	// Deprecated
 	DisableIPv6  bool            `yaml:"disableIPv6" default:"false"`
 	CertFile     string          `yaml:"certFile"`
 	KeyFile      string          `yaml:"keyFile"`
 	BootstrapDNS BootstrapConfig `yaml:"bootstrapDns"`
 	HostsFile    HostsFileConfig `yaml:"hostsFile"`
+	FqdnOnly     bool            `yaml:"fqdnOnly" default:"false"`
 	Filtering    FilteringConfig `yaml:"filtering"`
 }
 
@@ -537,17 +540,22 @@ type FilteringConfig struct {
 }
 
 // nolint:gochecknoglobals
-var config = &Config{}
+var (
+	config  = &Config{}
+	cfgLock sync.RWMutex
+)
 
-// LoadConfig creates new config from YAML file
+// LoadConfig creates new config from YAML file or a directory containing YAML files
 func LoadConfig(path string, mandatory bool) (*Config, error) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+
 	cfg := Config{}
 	if err := defaults.Set(&cfg); err != nil {
 		return nil, fmt.Errorf("can't apply default values: %w", err)
 	}
 
-	data, err := ioutil.ReadFile(path)
-
+	fs, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !mandatory {
 			// config file does not exist
@@ -557,7 +565,22 @@ func LoadConfig(path string, mandatory bool) (*Config, error) {
 			return config, nil
 		}
 
-		return nil, fmt.Errorf("can't read config file: %w", err)
+		return nil, fmt.Errorf("can't read config file(s): %w", err)
+	}
+
+	var data []byte
+
+	if fs.IsDir() {
+		data, err = readFromDir(path, data)
+
+		if err != nil {
+			return nil, fmt.Errorf("can't read config files: %w", err)
+		}
+	} else {
+		data, err = ioutil.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("can't read config file: %w", err)
+		}
 	}
 
 	err = unmarshalConfig(data, &cfg)
@@ -570,40 +593,54 @@ func LoadConfig(path string, mandatory bool) (*Config, error) {
 	return &cfg, nil
 }
 
+func readFromDir(path string, data []byte) ([]byte, error) {
+	err := filepath.WalkDir(path, func(filePath string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if path == filePath {
+			return nil
+		}
+
+		fileData, err := os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+
+		data = append(data, []byte("\n")...)
+		data = append(data, fileData...)
+
+		return nil
+	})
+
+	return data, err
+}
+
 func unmarshalConfig(data []byte, cfg *Config) error {
 	err := yaml.UnmarshalStrict(data, cfg)
 	if err != nil {
 		return fmt.Errorf("wrong file structure: %w", err)
 	}
 
-	err = validateConfig(cfg)
-	if err != nil {
-		return fmt.Errorf("unable to validate config: %w", err)
-	}
+	validateConfig(cfg)
 
 	return nil
 }
 
-func validateConfig(cfg *Config) (err error) {
-	if len(cfg.TLSPorts) != 0 && (cfg.CertFile == "" || cfg.KeyFile == "") {
-		err = multierror.Append(err, errors.New("'certFile' and 'keyFile' parameters are mandatory for TLS"))
-	}
-
-	if len(cfg.HTTPSPorts) != 0 && (cfg.CertFile == "" || cfg.KeyFile == "") {
-		err = multierror.Append(err, errors.New("'certFile' and 'keyFile' parameters are mandatory for HTTPS"))
-	}
-
+func validateConfig(cfg *Config) {
 	if cfg.DisableIPv6 {
 		log.Log().Warnf("'disableIPv6' is deprecated. Please use 'filtering.queryTypes' with 'AAAA' instead.")
 
 		cfg.Filtering.QueryTypes.Insert(dns.Type(dns.TypeAAAA))
 	}
-
-	return
 }
 
 // GetConfig returns the current config
 func GetConfig() *Config {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+
 	return config
 }
 
