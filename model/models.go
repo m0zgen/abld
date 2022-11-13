@@ -1,6 +1,6 @@
 package model
 
-//go:generate go-enum -f=$GOFILE --marshal --names
+//go:generate go run github.com/abice/go-enum -f=$GOFILE --marshal --names
 import (
 	"net"
 	"time"
@@ -18,6 +18,7 @@ import (
 // HOSTSFILE // the query was resolved by looking up the hosts file
 // FILTERED // the query was filtered by query type
 // NOTFQDN // the query was filtered as it is not fqdn conform
+// SPECIAL // the query was resolved by the special use domain name resolver
 // )
 type ResponseType int
 

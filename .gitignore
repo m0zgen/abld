@@ -1,5 +1,5 @@
 .idea/
-.vscode
+.vscode/
 *.iml
 /*.pem
 bin/
@@ -25,3 +25,5 @@ tools/test*
 tools/builds
 tools/tests
 tools/configs
+.vscode/
+vendor/
