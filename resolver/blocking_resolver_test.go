@@ -45,7 +45,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 	var (
 		sut        *BlockingResolver
 		sutConfig  config.BlockingConfig
-		m          *MockResolver
+		m          *mockResolver
 		mockAnswer *dns.Msg
 
 		err  error
@@ -53,6 +53,8 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 
 		expectedReturnCode int
 	)
+
+	systemResolverBootstrap := &Bootstrap{}
 
 	BeforeEach(func() {
 		expectedReturnCode = dns.RcodeSuccess
@@ -66,9 +68,9 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 	})
 
 	JustBeforeEach(func() {
-		m = &MockResolver{}
+		m = &mockResolver{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: mockAnswer}, nil)
-		tmp, err := NewBlockingResolver(sutConfig, nil, skipUpstreamCheck)
+		tmp, err := NewBlockingResolver(sutConfig, nil, systemResolverBootstrap)
 		Expect(err).Should(Succeed())
 		sut = tmp.(*BlockingResolver)
 		sut.Next(m)
@@ -102,7 +104,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 				Expect(err).Should(Succeed())
 
 				// recreate to trigger a reload
-				tmp, err := NewBlockingResolver(sutConfig, nil, skipUpstreamCheck)
+				tmp, err := NewBlockingResolver(sutConfig, nil, systemResolverBootstrap)
 				Expect(err).Should(Succeed())
 				sut = tmp.(*BlockingResolver)
 
@@ -842,8 +844,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 		})
 		It("should return 'disabled''", func() {
 			c := sut.Configuration()
-			Expect(c).Should(HaveLen(1))
-			Expect(c).Should(Equal([]string{"deactivated"}))
+			Expect(c).Should(ContainElement(configStatusDisabled))
 		})
 	})
 
@@ -852,7 +853,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 			It("should return error", func() {
 				_, err := NewBlockingResolver(config.BlockingConfig{
 					BlockType: "wrong",
-				}, nil, skipUpstreamCheck)
+				}, nil, systemResolverBootstrap)
 
 				Expect(err).Should(
 					MatchError("unknown blockType 'wrong', please use one of: ZeroIP, NxDomain or specify destination IP address(es)"))
@@ -865,7 +866,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 					WhiteLists:    map[string][]string{"whitelist": {"wrongPath"}},
 					StartStrategy: config.StartStrategyTypeFailOnError,
 					BlockType:     "zeroIp",
-				}, nil, skipUpstreamCheck)
+				}, nil, systemResolverBootstrap)
 				Expect(err).Should(HaveOccurred())
 			})
 		})
@@ -893,7 +894,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 				BlockTTL:  config.Duration(time.Minute),
 			}
 
-			tmp, err2 := NewBlockingResolver(sutConfig, redisClient, skipUpstreamCheck)
+			tmp, err2 := NewBlockingResolver(sutConfig, redisClient, systemResolverBootstrap)
 			Expect(err2).Should(Succeed())
 			sut = tmp.(*BlockingResolver)
 		})

@@ -91,8 +91,9 @@ type BlockingResolver struct {
 }
 
 // NewBlockingResolver returns a new configured instance of the resolver
-func NewBlockingResolver(cfg config.BlockingConfig,
-	redis *redis.Client, bootstrap *Bootstrap) (r ChainedResolver, err error) {
+func NewBlockingResolver(
+	cfg config.BlockingConfig, redis *redis.Client, bootstrap *Bootstrap,
+) (r ChainedResolver, err error) {
 	blockHandler, err := createBlockHandler(cfg)
 	if err != nil {
 		return nil, err
@@ -188,7 +189,7 @@ func (r *BlockingResolver) RefreshLists() {
 	r.whitelistMatcher.Refresh()
 }
 
-// nolint:prealloc
+//nolint:prealloc
 func (r *BlockingResolver) retrieveAllBlockingGroups() []string {
 	groups := make(map[string]bool, len(r.cfg.BlackLists))
 
@@ -328,34 +329,34 @@ func (r *BlockingResolver) handleBlocked(logger *logrus.Entry,
 
 // Configuration returns the current resolver configuration
 func (r *BlockingResolver) Configuration() (result []string) {
-	if len(r.cfg.ClientGroupsBlock) > 0 {
-		result = append(result, "clientGroupsBlock")
-		for key, val := range r.cfg.ClientGroupsBlock {
-			result = append(result, fmt.Sprintf("  %s = \"%s\"", key, strings.Join(val, ";")))
-		}
+	if len(r.cfg.ClientGroupsBlock) == 0 {
+		return configDisabled
+	}
 
-		blockType := r.cfg.BlockType
-		result = append(result, fmt.Sprintf("blockType = \"%s\"", blockType))
+	result = append(result, "clientGroupsBlock")
+	for key, val := range r.cfg.ClientGroupsBlock {
+		result = append(result, fmt.Sprintf("  %s = \"%s\"", key, strings.Join(val, ";")))
+	}
 
-		if blockType != "NXDOMAIN" {
-			result = append(result, fmt.Sprintf("blockTTL = %s", r.cfg.BlockTTL.String()))
-		}
+	blockType := r.cfg.BlockType
+	result = append(result, fmt.Sprintf("blockType = \"%s\"", blockType))
 
-		result = append(result, fmt.Sprintf("downloadTimeout = %s", r.cfg.DownloadTimeout.String()))
+	if blockType != "NXDOMAIN" {
+		result = append(result, fmt.Sprintf("blockTTL = %s", r.cfg.BlockTTL.String()))
+	}
 
-		result = append(result, fmt.Sprintf("FailStartOnListError = %t", r.cfg.FailStartOnListError))
+	result = append(result, fmt.Sprintf("downloadTimeout = %s", r.cfg.DownloadTimeout.String()))
 
-		result = append(result, "blacklist:")
-		for _, c := range r.blacklistMatcher.Configuration() {
-			result = append(result, fmt.Sprintf("  %s", c))
-		}
+	result = append(result, fmt.Sprintf("FailStartOnListError = %t", r.cfg.FailStartOnListError))
 
-		result = append(result, "whitelist:")
-		for _, c := range r.whitelistMatcher.Configuration() {
-			result = append(result, fmt.Sprintf("  %s", c))
-		}
-	} else {
-		result = []string{"deactivated"}
+	result = append(result, "blacklist:")
+	for _, c := range r.blacklistMatcher.Configuration() {
+		result = append(result, fmt.Sprintf("  %s", c))
+	}
+
+	result = append(result, "whitelist:")
+	for _, c := range r.whitelistMatcher.Configuration() {
+		result = append(result, fmt.Sprintf("  %s", c))
 	}
 
 	return result

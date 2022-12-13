@@ -28,12 +28,6 @@ const (
 	retryAttempts              = 3
 )
 
-// nolint:gochecknoglobals
-var (
-	// This is only set during tests (see upstream_resolver_test.go)
-	skipUpstreamCheck *Bootstrap
-)
-
 // UpstreamResolver sends request to external DNS server
 type UpstreamResolver struct {
 	upstream       config.Upstream
@@ -126,7 +120,7 @@ func (r *httpUpstreamClient) callExternal(msg *dns.Msg,
 		return nil, 0, fmt.Errorf("can't pack message: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(rawDNSMessage))
+	req, err := http.NewRequest(http.MethodPost, upstreamURL, bytes.NewReader(rawDNSMessage))
 
 	if err != nil {
 		return nil, 0, fmt.Errorf("can't create the new request %w", err)
@@ -198,10 +192,10 @@ func (r *dnsUpstreamClient) callExternal(msg *dns.Msg,
 }
 
 // NewUpstreamResolver creates new resolver instance
-func NewUpstreamResolver(upstream config.Upstream, bootstrap *Bootstrap) (*UpstreamResolver, error) {
+func NewUpstreamResolver(upstream config.Upstream, bootstrap *Bootstrap, verify bool) (*UpstreamResolver, error) {
 	r := newUpstreamResolverUnchecked(upstream, bootstrap)
 
-	if skipUpstreamCheck == nil || r.bootstrap != skipUpstreamCheck { // skip check during tests
+	if verify {
 		_, err := r.bootstrap.UpstreamIPs(r)
 		if err != nil {
 			return nil, err
@@ -224,7 +218,7 @@ func newUpstreamResolverUnchecked(upstream config.Upstream, bootstrap *Bootstrap
 
 // Configuration return current resolver configuration
 func (r *UpstreamResolver) Configuration() (result []string) {
-	return
+	return []string{r.String()}
 }
 
 func (r UpstreamResolver) String() string {
@@ -271,6 +265,7 @@ func (r *UpstreamResolver) Resolve(request *model.Request) (response *model.Resp
 		},
 		retry.Attempts(retryAttempts),
 		retry.DelayType(retry.FixedDelay),
+		retry.Delay(1*time.Millisecond),
 		retry.LastErrorOnly(true),
 		retry.RetryIf(func(err error) bool {
 			var netErr net.Error

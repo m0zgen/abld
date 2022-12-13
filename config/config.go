@@ -86,6 +86,10 @@ type QueryLogType int16
 // )
 type StartStrategyType uint16
 
+// QueryLogField data field to be logged
+// ENUM(clientIP,clientName,responseReason,responseAnswer,question,duration)
+type QueryLogField string
+
 type QType dns.Type
 
 func (c QType) String() string {
@@ -124,7 +128,7 @@ func (c *Duration) String() string {
 	return durafmt.Parse(time.Duration(*c)).String()
 }
 
-// nolint:gochecknoglobals
+//nolint:gochecknoglobals
 var netDefaultPort = map[NetProtocol]uint16{
 	NetProtocolTcpUdp: udpPort,
 	NetProtocolTcpTls: tlsPort,
@@ -447,7 +451,8 @@ func extractNet(upstream string) (NetProtocol, string) {
 }
 
 // Config main configuration
-// nolint:maligned
+//
+//nolint:maligned
 type Config struct {
 	Upstream            UpstreamConfig            `yaml:"upstream"`
 	UpstreamTimeout     Duration                  `yaml:"upstreamTimeout" default:"2s"`
@@ -460,26 +465,43 @@ type Config struct {
 	QueryLog            QueryLogConfig            `yaml:"queryLog"`
 	Prometheus          PrometheusConfig          `yaml:"prometheus"`
 	Redis               RedisConfig               `yaml:"redis"`
-	LogLevel            log.Level                 `yaml:"logLevel" default:"info"`
-	LogFormat           log.FormatType            `yaml:"logFormat" default:"text"`
-	LogPrivacy          bool                      `yaml:"logPrivacy" default:"false"`
-	LogTimestamp        bool                      `yaml:"logTimestamp" default:"true"`
-	DNSPorts            ListenConfig              `yaml:"port" default:"[\"53\"]"`
-	HTTPPorts           ListenConfig              `yaml:"httpPort"`
-	HTTPSPorts          ListenConfig              `yaml:"httpsPort"`
-	TLSPorts            ListenConfig              `yaml:"tlsPort"`
+	Log                 log.Config                `yaml:"log"`
+	Ports               PortsConfig               `yaml:"ports"`
 	DoHUserAgent        string                    `yaml:"dohUserAgent"`
 	MinTLSServeVer      string                    `yaml:"minTlsServeVersion" default:"1.2"`
 	StartVerifyUpstream bool                      `yaml:"startVerifyUpstream" default:"false"`
+	CertFile            string                    `yaml:"certFile"`
+	KeyFile             string                    `yaml:"keyFile"`
+	BootstrapDNS        BootstrapConfig           `yaml:"bootstrapDns"`
+	HostsFile           HostsFileConfig           `yaml:"hostsFile"`
+	FqdnOnly            bool                      `yaml:"fqdnOnly" default:"false"`
+	Filtering           FilteringConfig           `yaml:"filtering"`
+	Ede                 EdeConfig                 `yaml:"ede"`
 	// Deprecated
-	DisableIPv6  bool            `yaml:"disableIPv6" default:"false"`
-	CertFile     string          `yaml:"certFile"`
-	KeyFile      string          `yaml:"keyFile"`
-	BootstrapDNS BootstrapConfig `yaml:"bootstrapDns"`
-	HostsFile    HostsFileConfig `yaml:"hostsFile"`
-	FqdnOnly     bool            `yaml:"fqdnOnly" default:"false"`
-	Filtering    FilteringConfig `yaml:"filtering"`
-	Ede          EdeConfig       `yaml:"ede"`
+	DisableIPv6 bool `yaml:"disableIPv6" default:"false"`
+	// Deprecated
+	LogLevel log.Level `yaml:"logLevel" default:"info"`
+	// Deprecated
+	LogFormat log.FormatType `yaml:"logFormat" default:"text"`
+	// Deprecated
+	LogPrivacy bool `yaml:"logPrivacy" default:"false"`
+	// Deprecated
+	LogTimestamp bool `yaml:"logTimestamp" default:"true"`
+	// Deprecated
+	DNSPorts ListenConfig `yaml:"port" default:"[\"53\"]"`
+	// Deprecated
+	HTTPPorts ListenConfig `yaml:"httpPort"`
+	// Deprecated
+	HTTPSPorts ListenConfig `yaml:"httpsPort"`
+	// Deprecated
+	TLSPorts ListenConfig `yaml:"tlsPort"`
+}
+
+type PortsConfig struct {
+	DNS   ListenConfig `yaml:"dns" default:"[\"53\"]"`
+	HTTP  ListenConfig `yaml:"http"`
+	HTTPS ListenConfig `yaml:"https"`
+	TLS   ListenConfig `yaml:"tls"`
 }
 
 type BootstrapConfig bootstrapConfig // to avoid infinite recursion. See BootstrapConfig.UnmarshalYAML.
@@ -567,21 +589,26 @@ type CachingConfig struct {
 
 // QueryLogConfig configuration for the query logging
 type QueryLogConfig struct {
-	Target           string       `yaml:"target"`
-	Type             QueryLogType `yaml:"type"`
-	LogRetentionDays uint64       `yaml:"logRetentionDays"`
-	CreationAttempts int          `yaml:"creationAttempts" default:"3"`
-	CreationCooldown Duration     `yaml:"creationCooldown" default:"2s"`
+	Target           string          `yaml:"target"`
+	Type             QueryLogType    `yaml:"type"`
+	LogRetentionDays uint64          `yaml:"logRetentionDays"`
+	CreationAttempts int             `yaml:"creationAttempts" default:"3"`
+	CreationCooldown Duration        `yaml:"creationCooldown" default:"2s"`
+	Fields           []QueryLogField `yaml:"fields"`
 }
 
 // RedisConfig configuration for the redis connection
 type RedisConfig struct {
 	Address            string   `yaml:"address"`
+	Username           string   `yaml:"username" default:""`
 	Password           string   `yaml:"password" default:""`
 	Database           int      `yaml:"database" default:"0"`
 	Required           bool     `yaml:"required" default:"false"`
 	ConnectionAttempts int      `yaml:"connectionAttempts" default:"3"`
 	ConnectionCooldown Duration `yaml:"connectionCooldown" default:"1s"`
+	SentinelUsername   string   `yaml:"sentinelUsername" default:""`
+	SentinelPassword   string   `yaml:"sentinelPassword" default:""`
+	SentinelAddresses  []string `yaml:"sentinelAddresses"`
 }
 
 type HostsFileConfig struct {
@@ -599,7 +626,7 @@ type EdeConfig struct {
 	Enable bool `yaml:"enable" default:"false"`
 }
 
-// nolint:gochecknoglobals
+//nolint:gochecknoglobals
 var (
 	config  = &Config{}
 	cfgLock sync.RWMutex
@@ -731,6 +758,66 @@ func validateConfig(cfg *Config) {
 		} else if cfg.Blocking.StartStrategy == StartStrategyTypeFast {
 			log.Log().Warnf("'blocking.startStrategy' with 'fast' will ignore 'blocking.failStartOnListError'.")
 		}
+	}
+
+	fixDeprecatedLog(cfg)
+
+	fixDeprecatedPorts(cfg)
+}
+
+// fixDeprecatedLog ensures backwards compatibility for logging options
+func fixDeprecatedLog(cfg *Config) {
+	if cfg.LogLevel != log.LevelInfo && cfg.Log.Level == log.LevelInfo {
+		log.Log().Warnf("'logLevel' is deprecated. Please use 'log.level' instead.")
+
+		cfg.Log.Level = cfg.LogLevel
+	}
+
+	if cfg.LogFormat != log.FormatTypeText && cfg.Log.Format == log.FormatTypeText {
+		log.Log().Warnf("'logFormat' is deprecated. Please use 'log.format' instead.")
+
+		cfg.Log.Format = cfg.LogFormat
+	}
+
+	if cfg.LogPrivacy && !cfg.Log.Privacy {
+		log.Log().Warnf("'logPrivacy' is deprecated. Please use 'log.privacy' instead.")
+
+		cfg.Log.Privacy = cfg.LogPrivacy
+	}
+
+	if !cfg.LogTimestamp && cfg.Log.Timestamp {
+		log.Log().Warnf("'logTimestamp' is deprecated. Please use 'log.timestamp' instead.")
+
+		cfg.Log.Timestamp = cfg.LogTimestamp
+	}
+}
+
+// fixDeprecatedPorts ensures backwards compatibility for ports options
+func fixDeprecatedPorts(cfg *Config) {
+	defaultDNSPort := ListenConfig([]string{"53"})
+	if (len(cfg.DNSPorts) > 1 || (len(cfg.DNSPorts) == 1 && cfg.DNSPorts[0] != defaultDNSPort[0])) &&
+		(len(cfg.Ports.DNS) == 1 && cfg.Ports.DNS[0] == defaultDNSPort[0]) {
+		log.Log().Warnf("'port' is deprecated. Please use 'ports.dns' instead.")
+
+		cfg.Ports.DNS = cfg.DNSPorts
+	}
+
+	if len(cfg.HTTPPorts) > 0 && len(cfg.Ports.HTTP) == 0 {
+		log.Log().Warnf("'httpPort' is deprecated. Please use 'ports.http' instead.")
+
+		cfg.Ports.HTTP = cfg.HTTPPorts
+	}
+
+	if len(cfg.HTTPSPorts) > 0 && len(cfg.Ports.HTTPS) == 0 {
+		log.Log().Warnf("'httpsPort' is deprecated. Please use 'ports.https' instead.")
+
+		cfg.Ports.HTTPS = cfg.HTTPSPorts
+	}
+
+	if len(cfg.TLSPorts) > 0 && len(cfg.Ports.TLS) == 0 {
+		log.Log().Warnf("'tlsPort' is deprecated. Please use 'ports.tls' instead.")
+
+		cfg.Ports.TLS = cfg.TLSPorts
 	}
 }
 

@@ -41,7 +41,7 @@ func TestServer(data string) *httptest.Server {
 // DoGetRequest performs a GET request
 func DoGetRequest(url string,
 	fn func(w http.ResponseWriter, r *http.Request)) (*httptest.ResponseRecorder, *bytes.Buffer) {
-	r, _ := http.NewRequest("GET", url, nil)
+	r, _ := http.NewRequest(http.MethodGet, url, nil)
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(fn)
@@ -92,10 +92,16 @@ func (matcher *dnsRecordMatcher) matchSingle(rr dns.RR) (success bool, err error
 // Match checks the DNS record
 func (matcher *dnsRecordMatcher) Match(actual interface{}) (success bool, err error) {
 	switch i := actual.(type) {
+	case *dns.Msg:
+		return matcher.Match(i.Answer)
 	case dns.RR:
 		return matcher.matchSingle(i)
 	case []dns.RR:
-		return matcher.matchSingle(i[0])
+		if len(i) == 1 {
+			return matcher.matchSingle(i[0])
+		}
+
+		return false, fmt.Errorf("DNSRecord matcher expects []dns.RR with len == 1")
 	default:
 		return false, fmt.Errorf("DNSRecord matcher expects an dns.RR or []dns.RR")
 	}
