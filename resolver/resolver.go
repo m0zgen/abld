@@ -72,7 +72,7 @@ func returnResponseModel(response *dns.Msg, rtype model.ResponseType, reason str
 	}, nil
 }
 
-func newRequestWithClientID(question string, rType dns.Type, ip string, requestClientID string) *model.Request {
+func newRequestWithClientID(question string, rType dns.Type, ip, requestClientID string) *model.Request {
 	return &model.Request{
 		ClientIP:        net.ParseIP(ip),
 		RequestClientID: requestClientID,
@@ -85,7 +85,6 @@ func newRequestWithClientID(question string, rType dns.Type, ip string, requestC
 
 // Resolver generic interface for all resolvers
 type Resolver interface {
-
 	// Resolve performs resolution of a DNS request
 	Resolve(req *model.Request) (*model.Response, error)
 
@@ -121,17 +120,8 @@ func (r *NextResolver) GetNext() Resolver {
 
 // NamedResolver is a resolver with a special name
 type NamedResolver interface {
-
 	// Name returns the full name of the resolver
 	Name() string
-}
-
-func logger(prefix string) *logrus.Entry {
-	return log.PrefixedLog(prefix)
-}
-
-func withPrefix(logger *logrus.Entry, prefix string) *logrus.Entry {
-	return logger.WithField("prefix", prefix)
 }
 
 // Chain creates a chain of resolvers

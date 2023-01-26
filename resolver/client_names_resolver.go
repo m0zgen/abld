@@ -8,6 +8,7 @@ import (
 
 	"github.com/0xERR0R/blocky/cache/expirationcache"
 	"github.com/0xERR0R/blocky/config"
+	"github.com/0xERR0R/blocky/log"
 	"github.com/0xERR0R/blocky/model"
 	"github.com/0xERR0R/blocky/util"
 
@@ -101,7 +102,7 @@ func (r *ClientNamesResolver) getClientNames(request *model.Request) []string {
 		}
 	}
 
-	names := r.resolveClientNames(ip, withPrefix(request.Log, "client_names_resolver"))
+	names := r.resolveClientNames(ip, log.WithPrefix(request.Log, "client_names_resolver"))
 	r.cache.Put(ip.String(), names, time.Hour)
 
 	return names
@@ -141,7 +142,6 @@ func (r *ClientNamesResolver) resolveClientNames(ip net.IP, logger *logrus.Entry
 		Req: util.NewMsgWithQuestion(reverse, dns.Type(dns.TypePTR)),
 		Log: logger,
 	})
-
 	if err != nil {
 		logger.Error("can't resolve client name: ", err)
 
