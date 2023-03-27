@@ -55,7 +55,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			})
 
 			It("should use the system resolver", func() {
-				usedSystemResolver := make(chan bool, 10)
+				usedSystemResolver := make(chan bool, 100)
 
 				sut.systemResolver = &net.Resolver{
 					PreferGo: true,
@@ -282,7 +282,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				Expect(err).ShouldNot(Succeed())
 				Expect(err.Error()).Should(ContainSubstring(resolveErr.Error()))
-				Expect(ips).Should(HaveLen(0))
+				Expect(ips).Should(BeEmpty())
 			})
 		})
 
@@ -296,7 +296,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				Expect(err).ShouldNot(Succeed())
 				Expect(err.Error()).Should(ContainSubstring("no such host"))
-				Expect(ips).Should(HaveLen(0))
+				Expect(ips).Should(BeEmpty())
 			})
 		})
 

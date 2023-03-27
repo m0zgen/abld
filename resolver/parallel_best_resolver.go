@@ -15,18 +15,21 @@ import (
 	"github.com/0xERR0R/blocky/util"
 	"github.com/miekg/dns"
 
-	"github.com/mroth/weightedrand"
+	"github.com/mroth/weightedrand/v2"
 	"github.com/sirupsen/logrus"
 )
 
 const (
-	upstreamDefaultCfgName = "default"
-	parallelResolverLogger = "parallel_best_resolver"
+	upstreamDefaultCfgName = config.UpstreamDefaultCfgName
+	parallelResolverType   = "parallel_best"
 	resolverCount          = 2
 )
 
 // ParallelBestResolver delegates the DNS message to 2 upstream resolvers and returns the fastest answer
 type ParallelBestResolver struct {
+	configurable[*config.ParallelBestConfig]
+	typed
+
 	resolversPerClient map[string][]*upstreamResolverStatus
 }
 
@@ -77,10 +80,11 @@ func testResolver(r *UpstreamResolver) error {
 
 // NewParallelBestResolver creates new resolver instance
 func NewParallelBestResolver(
-	upstreamResolvers map[string][]config.Upstream, bootstrap *Bootstrap, shouldVerifyUpstreams bool,
-) (Resolver, error) {
-	logger := log.PrefixedLog(parallelResolverLogger)
+	cfg config.ParallelBestConfig, bootstrap *Bootstrap, shouldVerifyUpstreams bool,
+) (*ParallelBestResolver, error) {
+	logger := log.PrefixedLog(parallelResolverType)
 
+	upstreamResolvers := cfg.ExternalResolvers
 	resolverGroups := make(map[string][]Resolver, len(upstreamResolvers))
 
 	for name, upstreamCfgs := range upstreamResolvers {
@@ -114,10 +118,12 @@ func NewParallelBestResolver(
 		resolverGroups[name] = group
 	}
 
-	return newParallelBestResolver(resolverGroups)
+	return newParallelBestResolver(cfg, resolverGroups)
 }
 
-func newParallelBestResolver(resolverGroups map[string][]Resolver) (Resolver, error) {
+func newParallelBestResolver(
+	cfg config.ParallelBestConfig, resolverGroups map[string][]Resolver,
+) (*ParallelBestResolver, error) {
 	resolversPerClient := make(map[string][]*upstreamResolverStatus, len(resolverGroups))
 
 	for groupName, resolvers := range resolverGroups {
@@ -136,27 +142,21 @@ func newParallelBestResolver(resolverGroups map[string][]Resolver) (Resolver, er
 	}
 
 	r := ParallelBestResolver{
+		configurable: withConfig(&cfg),
+		typed:        withType(parallelResolverType),
+
 		resolversPerClient: resolversPerClient,
 	}
 
 	return &r, nil
 }
 
-// Configuration returns current resolver configuration
-func (r *ParallelBestResolver) Configuration() (result []string) {
-	result = append(result, "upstream resolvers:")
-	for name, res := range r.resolversPerClient {
-		result = append(result, fmt.Sprintf("- %s", name))
-		for _, r := range res {
-			result = append(result, fmt.Sprintf("  - %s", r.resolver))
-		}
-	}
-
-	return
+func (r *ParallelBestResolver) Name() string {
+	return r.String()
 }
 
-func (r ParallelBestResolver) String() string {
-	result := make([]string, 0)
+func (r *ParallelBestResolver) String() string {
+	result := make([]string, 0, len(r.resolversPerClient))
 
 	for name, res := range r.resolversPerClient {
 		tmp := make([]string, len(res))
@@ -206,7 +206,7 @@ func (r *ParallelBestResolver) resolversForClient(request *model.Request) (resul
 
 // Resolve sends the query request to multiple upstream resolvers and returns the fastest result
 func (r *ParallelBestResolver) Resolve(request *model.Request) (*model.Response, error) {
-	logger := log.WithPrefix(request.Log, parallelResolverLogger)
+	logger := log.WithPrefix(request.Log, parallelResolverType)
 
 	resolvers := r.resolversForClient(request)
 
@@ -264,7 +264,7 @@ func pickRandom(resolvers []*upstreamResolverStatus) (resolver1, resolver2 *upst
 func weightedRandom(in []*upstreamResolverStatus, exclude Resolver) *upstreamResolverStatus {
 	const errorWindowInSec = 60
 
-	var choices []weightedrand.Choice
+	var choices []weightedrand.Choice[*upstreamResolverStatus, uint]
 
 	for _, res := range in {
 		var weight float64 = errorWindowInSec
@@ -276,15 +276,12 @@ func weightedRandom(in []*upstreamResolverStatus, exclude Resolver) *upstreamRes
 		}
 
 		if exclude != res.resolver {
-			choices = append(choices, weightedrand.Choice{
-				Item:   res,
-				Weight: uint(weight),
-			})
+			choices = append(choices, weightedrand.NewChoice(res, uint(weight)))
 		}
 	}
 
 	c, err := weightedrand.NewChooser(choices...)
 	util.LogOnError("can't choose random weighted resolver: ", err)
 
-	return c.Pick().(*upstreamResolverStatus)
+	return c.Pick()
 }

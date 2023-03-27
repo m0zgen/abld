@@ -3,8 +3,7 @@ name: Development docker build
 on:
   push:
     branches:
-      - development
-      - fb-*
+      - main
 
 permissions:
   security-events: write
@@ -90,7 +89,7 @@ jobs:
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Populate build variables
         id: get_vars
@@ -112,15 +111,15 @@ jobs:
           echo "build_time=${BUILD_TIME}" >> $GITHUB_OUTPUT
           echo "BUILD_TIME: ${BUILD_TIME}"
 
-          TAGS="ghcr.io/${REPOSITORY}:${BRANCH}"
+          TAGS="ghcr.io/${REPOSITORY}:${BRANCH} , ghcr.io/${REPOSITORY}:development"
           if [[ "${{ github.repository_owner }}" == "0xERR0R" ]]; then
-            TAGS="${TAGS} , spx01/blocky:${BRANCH}"
+            TAGS="${TAGS} , spx01/blocky:${BRANCH} , spx01/blocky:development"
           fi
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
           echo "TAGS: ${TAGS}"
       
       - name: Build and push
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v4
         with:
           context: .
           platforms: linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64

@@ -201,7 +201,8 @@ func (s *Server) apiQuery(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	dnsRequest := util.NewMsgWithQuestion(query, qType)
-	r := createResolverRequest(nil, dnsRequest)
+
+	r := newRequest(net.ParseIP(extractIP(req)), model.RequestProtocolTCP, "", dnsRequest)
 
 	response, err := s.queryResolver.Resolve(r)
 	if err != nil {
@@ -261,6 +262,14 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 			Title string
 		}
 
+<<<<<<< HEAD
+=======
+		swaggerVersion := "main"
+		if util.Version != "undefined" {
+			swaggerVersion = util.Version
+		}
+
+>>>>>>> origin/main
 		type PageData struct {
 			Links     []HandlerLink
 			Version   string

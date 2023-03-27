@@ -15,13 +15,14 @@ builds:
       - goos: windows
         goarch: arm64
     ldflags:
-      - -w -s -X github.com/0xERR0R/blocky/util.Version={{.Version}} -X github.com/0xERR0R/blocky/util.BuildTime={{time "20060102-150405"}}
+      - -w -s -X github.com/0xERR0R/blocky/util.Version=v{{.Version}} -X github.com/0xERR0R/blocky/util.BuildTime={{time "20060102-150405"}}
 release:
   draft: true
 archives:
   - format_overrides:
       - goos: windows
         format: zip
+<<<<<<< HEAD
     replacements:
       darwin: macOS
       linux: Linux
@@ -29,6 +30,19 @@ archives:
       amd64: x86_64
 snapshot:
   name_template: "{{ .Tag }}-{{.ShortCommit}}-bld"
+=======
+    name_template: >-
+      {{ .ProjectName }}_v
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+snapshot:
+  name_template: "{{ .Version }}-{{.ShortCommit}}"
+>>>>>>> origin/main
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"
 changelog:

@@ -297,6 +297,7 @@ func createUDPServer(address string) (*dns.Server, error) {
 func createSelfSignedCert() (tls.Certificate, error) {
 	// Create CA
 	ca := &x509.Certificate{
+		//nolint:gosec
 		SerialNumber:          big.NewInt(int64(mrand.Intn(math.MaxInt))),
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(caExpiryYears, 0, 0),
@@ -340,6 +341,7 @@ func createSelfSignedCert() (tls.Certificate, error) {
 
 	// Create certificate
 	cert := &x509.Certificate{
+		//nolint:gosec
 		SerialNumber: big.NewInt(int64(mrand.Intn(math.MaxInt))),
 		DNSNames:     []string{"*"},
 		NotBefore:    time.Now(),
@@ -395,7 +397,7 @@ func createQueryResolver(
 	redisClient *redis.Client,
 ) (r resolver.Resolver, err error) {
 	blocking, blErr := resolver.NewBlockingResolver(cfg.Blocking, redisClient, bootstrap)
-	parallel, pErr := resolver.NewParallelBestResolver(cfg.Upstream.ExternalResolvers, bootstrap, cfg.StartVerifyUpstream)
+	parallel, pErr := resolver.NewParallelBestResolver(cfg.Upstream, bootstrap, cfg.StartVerifyUpstream)
 	clientNames, cnErr := resolver.NewClientNamesResolver(cfg.ClientLookup, bootstrap, cfg.StartVerifyUpstream)
 	condUpstream, cuErr := resolver.NewConditionalUpstreamResolver(cfg.Conditional, bootstrap, cfg.StartVerifyUpstream)
 
@@ -411,16 +413,16 @@ func createQueryResolver(
 
 	r = resolver.Chain(
 		resolver.NewFilteringResolver(cfg.Filtering),
-		resolver.NewFqdnOnlyResolver(*cfg),
+		resolver.NewFqdnOnlyResolver(cfg.FqdnOnly),
 		clientNames,
 		resolver.NewEdeResolver(cfg.Ede),
 		resolver.NewQueryLoggingResolver(cfg.QueryLog),
 		resolver.NewMetricsResolver(cfg.Prometheus),
-		resolver.NewRewriterResolver(cfg.CustomDNS.RewriteConfig, resolver.NewCustomDNSResolver(cfg.CustomDNS)),
+		resolver.NewRewriterResolver(cfg.CustomDNS.RewriterConfig, resolver.NewCustomDNSResolver(cfg.CustomDNS)),
 		resolver.NewHostsFileResolver(cfg.HostsFile),
 		blocking,
 		resolver.NewCachingResolver(cfg.Caching, redisClient),
-		resolver.NewRewriterResolver(cfg.Conditional.RewriteConfig, condUpstream),
+		resolver.NewRewriterResolver(cfg.Conditional.RewriterConfig, condUpstream),
 		resolver.NewSpecialUseDomainNamesResolver(),
 		parallel,
 	)
@@ -439,25 +441,12 @@ func (s *Server) registerDNSHandlers() {
 func (s *Server) printConfiguration() {
 	logger().Info("current configuration:")
 
-	res := s.queryResolver
-	for res != nil {
-		logger().Infof("-> resolver: '%s'", resolver.Name(res))
+	resolver.ForEach(s.queryResolver, func(res resolver.Resolver) {
+		resolver.LogResolverConfig(res, logger())
+	})
 
-		for _, c := range res.Configuration() {
-			logger().Infof("     %s", c)
-		}
-
-		if c, ok := res.(resolver.ChainedResolver); ok {
-			res = c.GetNext()
-		} else {
-			break
-		}
-	}
-
-	logger().Infof("- DNS listening on addrs/ports: %v", s.cfg.Ports.DNS)
-	logger().Infof("- TLS listening on addrs/ports: %v", s.cfg.Ports.TLS)
-	logger().Infof("- HTTP listening on addrs/ports: %v", s.cfg.Ports.HTTP)
-	logger().Infof("- HTTPS listening on addrs/ports: %v", s.cfg.Ports.HTTPS)
+	logger().Info("listeners:")
+	log.WithIndent(logger(), "  ", s.cfg.Ports.LogConfig)
 
 	logger().Info("runtime information:")
 
@@ -465,17 +454,19 @@ func (s *Server) printConfiguration() {
 	runtime.GC()
 	debug.FreeOSMemory()
 
+	logger().Infof("  numCPU =       %d", runtime.NumCPU())
+	logger().Infof("  numGoroutine = %d", runtime.NumGoroutine())
+
 	// gather memory stats
 	var m runtime.MemStats
 
 	runtime.ReadMemStats(&m)
 
-	logger().Infof("MEM Alloc =        %10v MB", toMB(m.Alloc))
-	logger().Infof("MEM HeapAlloc =    %10v MB", toMB(m.HeapAlloc))
-	logger().Infof("MEM Sys =          %10v MB", toMB(m.Sys))
-	logger().Infof("MEM NumGC =        %10v", m.NumGC)
-	logger().Infof("RUN NumCPU =       %10d", runtime.NumCPU())
-	logger().Infof("RUN NumGoroutine = %10d", runtime.NumGoroutine())
+	logger().Infof("  memory:")
+	logger().Infof("    alloc =        %10v MB", toMB(m.Alloc))
+	logger().Infof("    heapAlloc =    %10v MB", toMB(m.HeapAlloc))
+	logger().Infof("    sys =          %10v MB", toMB(m.Sys))
+	logger().Infof("    numGC =        %10v", m.NumGC)
 }
 
 func toMB(b uint64) uint64 {

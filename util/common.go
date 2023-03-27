@@ -109,7 +109,7 @@ func NewMsgWithQuestion(question string, qType dns.Type) *dns.Msg {
 
 // NewMsgWithAnswer creates new DNS message with answer
 func NewMsgWithAnswer(domain string, ttl uint, dnsType dns.Type, address string) (*dns.Msg, error) {
-	rr, err := dns.NewRR(fmt.Sprintf("%s\t%d\tIN\t%s\t%s", domain, ttl, dnsType.String(), address))
+	rr, err := dns.NewRR(fmt.Sprintf("%s\t%d\tIN\t%s\t%s", domain, ttl, dnsType, address))
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func CidrContainsIP(cidr string, ip net.IP) bool {
 
 // ClientNameMatchesGroupName checks if a group with optional wildcards contains a client name
 func ClientNameMatchesGroupName(group, clientName string) bool {
-	match, _ := filepath.Match(group, clientName)
+	match, _ := filepath.Match(strings.ToLower(group), strings.ToLower(clientName))
 
 	return match
 }
