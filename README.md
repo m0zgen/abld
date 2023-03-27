@@ -95,4 +95,7 @@ You can inform me about of accidents blocked / unblocked domains through [DNS-HO
 * https://github.com/m0zgen/dns-hole.git
 * https://github.com/m0zgen/dns-tester.git
 * https://github.com/m0zgen/bench-dns.git
+* https://github.com/m0zgen/bld-agregator
+* https://github.com/m0zgen/ip2drop
+* https://github.com/m0zgen/cactusd
 * https://lab.sys-adm.in
