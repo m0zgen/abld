@@ -86,9 +86,7 @@ var _ = Describe("Hosts", func() {
 	})
 
 	Describe("HostsIterator.ForEachHost", func() {
-		var (
-			entry *HostsIterator
-		)
+		var entry *HostsIterator
 
 		BeforeEach(func() {
 			sutReader = linesReader(
@@ -227,9 +225,7 @@ var _ = Describe("HostsFile", func() {
 	})
 
 	Describe("HostsFileEntry.forEachHost", func() {
-		var (
-			entry *HostsFileEntry
-		)
+		var entry *HostsFileEntry
 
 		BeforeEach(func() {
 			sutReader = linesReader(
@@ -303,6 +299,18 @@ var _ = Describe("HostList", func() {
 				"# comment",
 				"  ",
 				"domain.tld # comment",
+
+				// http://www.i18nguy.com/markup/idna-examples.html
+				"belgië.icom.museum",
+				"الأردن.icom.museum",
+				"한국.icom.museum",
+
+				// Domain name w/ rune not supported by `idna.Lookup`
+				"domain_underscore.tld",
+
+				// invalid domain names we want to support
+				"-start-with-a-hyphen.com",
+				"end-with-a-hyphen-.com",
 			)
 		})
 
@@ -317,11 +325,41 @@ var _ = Describe("HostList", func() {
 			Expect(entry.String()).Should(Equal("domain.tld"))
 			Expect(sut.Position()).Should(Equal("line 4"))
 
+			entry, err = sut.Next(context.Background())
+			Expect(err).Should(Succeed())
+			Expect(entry.String()).Should(Equal("xn--belgi-rsa.icom.museum"))
+			Expect(sut.Position()).Should(Equal("line 5"))
+
+			entry, err = sut.Next(context.Background())
+			Expect(err).Should(Succeed())
+			Expect(entry.String()).Should(Equal("xn--igbhzh7gpa.icom.museum"))
+			Expect(sut.Position()).Should(Equal("line 6"))
+
+			entry, err = sut.Next(context.Background())
+			Expect(err).Should(Succeed())
+			Expect(entry.String()).Should(Equal("xn--3e0b707e.icom.museum"))
+			Expect(sut.Position()).Should(Equal("line 7"))
+
+			entry, err = sut.Next(context.Background())
+			Expect(err).Should(Succeed())
+			Expect(entry.String()).Should(Equal("domain_underscore.tld"))
+			Expect(sut.Position()).Should(Equal("line 8"))
+
+			entry, err = sut.Next(context.Background())
+			Expect(err).Should(Succeed())
+			Expect(entry.String()).Should(Equal("-start-with-a-hyphen.com"))
+			Expect(sut.Position()).Should(Equal("line 9"))
+
+			entry, err = sut.Next(context.Background())
+			Expect(err).Should(Succeed())
+			Expect(entry.String()).Should(Equal("end-with-a-hyphen-.com"))
+			Expect(sut.Position()).Should(Equal("line 10"))
+
 			_, err = sut.Next(context.Background())
 			Expect(err).ShouldNot(Succeed())
 			Expect(err).Should(MatchError(io.EOF))
 			Expect(IsNonResumableErr(err)).Should(BeTrue())
-			Expect(sut.Position()).Should(Equal("line 5"))
+			Expect(sut.Position()).Should(Equal("line 11"))
 		})
 	})
 
@@ -346,9 +384,7 @@ var _ = Describe("HostList", func() {
 	})
 
 	Describe("HostListEntry.forEachHost", func() {
-		var (
-			entry *HostListEntry
-		)
+		var entry *HostListEntry
 
 		BeforeEach(func() {
 			sutReader = linesReader(

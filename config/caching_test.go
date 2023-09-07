@@ -9,9 +9,7 @@ import (
 )
 
 var _ = Describe("CachingConfig", func() {
-	var (
-		cfg CachingConfig
-	)
+	var cfg CachingConfig
 
 	suiteBeforeEach()
 
@@ -59,6 +57,22 @@ var _ = Describe("CachingConfig", func() {
 
 				Expect(hook.Calls).ShouldNot(BeEmpty())
 				Expect(hook.Messages).Should(ContainElement(ContainSubstring("prefetching:")))
+			})
+		})
+	})
+
+	Describe("EnablePrefetch", func() {
+		When("prefetching is enabled", func() {
+			BeforeEach(func() {
+				cfg = CachingConfig{}
+			})
+
+			It("should return configuration", func() {
+				cfg.EnablePrefetch()
+
+				Expect(cfg.Prefetching).Should(BeTrue())
+				Expect(cfg.PrefetchThreshold).Should(Equal(0))
+				Expect(cfg.MaxCachingTime).ShouldNot(BeZero())
 			})
 		})
 	})

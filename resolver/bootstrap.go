@@ -64,12 +64,9 @@ func NewBootstrap(cfg *config.Config) (b *Bootstrap, err error) {
 
 	// Bootstrap doesn't have a `LogConfig` method, and since that's the only place
 	// where `ParallelBestResolver` uses its config, we can just use an empty one.
-	pbCfg := config.ParallelBestConfig{}
+	var pbCfg config.UpstreamsConfig
 
-	parallelResolver, err := newParallelBestResolver(pbCfg, bootstraped.ResolverGroups())
-	if err != nil {
-		return nil, fmt.Errorf("could not create bootstrap ParallelBestResolver: %w", err)
-	}
+	parallelResolver := newParallelBestResolver(pbCfg, bootstraped.ResolverGroups())
 
 	// Always enable prefetching to avoid stalling user requests
 	// Otherwise, a request to blocky could end up waiting for 2 DNS requests:
@@ -78,7 +75,7 @@ func NewBootstrap(cfg *config.Config) (b *Bootstrap, err error) {
 	cachingCfg := cfg.Caching
 	cachingCfg.EnablePrefetch()
 
-	if cachingCfg.MinCachingTime.IsZero() {
+	if !cachingCfg.MinCachingTime.IsAboveZero() {
 		// Set a min time in case the user didn't to avoid prefetching too often
 		cachingCfg.MinCachingTime = config.Duration(time.Hour)
 	}
@@ -115,8 +112,8 @@ func (b *Bootstrap) resolveUpstream(r Resolver, host string) ([]net.IP, error) {
 		cfg := config.GetConfig()
 		ctx := context.Background()
 
-		timeout := cfg.UpstreamTimeout
-		if timeout.IsZero() {
+		timeout := cfg.Upstreams.Timeout
+		if timeout.IsAboveZero() {
 			var cancel context.CancelFunc
 
 			ctx, cancel = context.WithTimeout(ctx, timeout.ToDuration())

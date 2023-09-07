@@ -27,8 +27,9 @@ blocking:
   clientGroupsBlock:
     default:
       - ads
-port: 53
-httpPort: 4000
+ports:
+  dns: 53
+  http: 4000
 ```
 
 ## Run as standalone binary
@@ -243,5 +244,9 @@ See [https://github.com/m0zgen/blocky-installer](https://github.com/m0zgen/block
 ### Package for FreeBSD
 
 See [https://www.freebsd.org/cgi/ports.cgi?query=blocky&stype=all](https://www.freebsd.org/cgi/ports.cgi?query=blocky&stype=all)
+
+### Homebrew package for MacOS
+
+See [https://formulae.brew.sh/formula/blocky](https://formulae.brew.sh/formula/blocky)
 
 --8<-- "docs/includes/abbreviations.md"

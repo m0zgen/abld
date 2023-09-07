@@ -122,17 +122,17 @@ var _ = BeforeSuite(func() {
 			},
 		},
 		Blocking: config.BlockingConfig{
-			BlackLists: map[string][]string{
-				"ads": {
+			BlackLists: map[string][]config.BytesSource{
+				"ads": config.NewBytesSources(
 					doubleclickFile.Path,
 					bildFile.Path,
 					heiseFile.Path,
-				},
-				"youtube": {youtubeFile.Path},
+				),
+				"youtube": config.NewBytesSources(youtubeFile.Path),
 			},
-			WhiteLists: map[string][]string{
-				"ads":       {heiseFile.Path},
-				"whitelist": {heiseFile.Path},
+			WhiteLists: map[string][]config.BytesSource{
+				"ads":       config.NewBytesSources(heiseFile.Path),
+				"whitelist": config.NewBytesSources(heiseFile.Path),
 			},
 			ClientGroupsBlock: map[string][]string{
 				"default":         {"ads"},
@@ -143,8 +143,8 @@ var _ = BeforeSuite(func() {
 			BlockType: "zeroIp",
 			BlockTTL:  config.Duration(6 * time.Hour),
 		},
-		Upstream: config.ParallelBestConfig{
-			ExternalResolvers: map[string][]config.Upstream{"default": {upstreamGoogle}},
+		Upstreams: config.UpstreamsConfig{
+			Groups: map[string][]config.Upstream{"default": {upstreamGoogle}},
 		},
 		ClientLookup: config.ClientLookupConfig{
 			Upstream: upstreamClient,
@@ -616,7 +616,7 @@ var _ = Describe("Running DNS server", func() {
 
 			Expect(cErr).Should(Succeed())
 
-			cfg.Upstream.ExternalResolvers = map[string][]config.Upstream{
+			cfg.Upstreams.Groups = map[string][]config.Upstream{
 				"default": {config.Upstream{Net: config.NetProtocolTcpUdp, Host: "1.1.1.1", Port: 53}},
 			}
 
@@ -643,8 +643,8 @@ var _ = Describe("Running DNS server", func() {
 			It("start was called 2 times, start should fail", func() {
 				// create server
 				server, err := NewServer(&config.Config{
-					Upstream: config.ParallelBestConfig{
-						ExternalResolvers: map[string][]config.Upstream{
+					Upstreams: config.UpstreamsConfig{
+						Groups: map[string][]config.Upstream{
 							"default": {config.Upstream{Net: config.NetProtocolTcpUdp, Host: "4.4.4.4", Port: 53}},
 						},
 					},
@@ -685,8 +685,8 @@ var _ = Describe("Running DNS server", func() {
 			It("stop was called 2 times, start should fail", func() {
 				// create server
 				server, err := NewServer(&config.Config{
-					Upstream: config.ParallelBestConfig{
-						ExternalResolvers: map[string][]config.Upstream{
+					Upstreams: config.UpstreamsConfig{
+						Groups: map[string][]config.Upstream{
 							"default": {config.Upstream{Net: config.NetProtocolTcpUdp, Host: "4.4.4.4", Port: 53}},
 						},
 					},
@@ -728,6 +728,45 @@ var _ = Describe("Running DNS server", func() {
 		})
 	})
 
+	Describe("NewServer with strict upstream strategy", func() {
+		It("successfully returns upstream branches", func() {
+			branches, err := createUpstreamBranches(&config.Config{
+				Upstreams: config.UpstreamsConfig{
+					Strategy: config.UpstreamStrategyStrict,
+					Groups: config.UpstreamGroups{
+						"default": {{Host: "0.0.0.0"}},
+					},
+				},
+			},
+				nil)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(branches).ToNot(BeNil())
+			Expect(branches).To(HaveLen(1))
+			_ = branches["default"].(*resolver.StrictResolver)
+		})
+	})
+
+	Describe("create query resolver", func() {
+		When("some upstream returns error", func() {
+			It("create query resolver should return error", func() {
+				r, err := createQueryResolver(&config.Config{
+					StartVerifyUpstream: true,
+					Upstreams: config.UpstreamsConfig{
+						Groups: config.UpstreamGroups{
+							"default": {{Host: "0.0.0.0"}},
+						},
+					},
+				},
+					nil, nil)
+
+				Expect(err).To(HaveOccurred())
+				Expect(err).To(MatchError(ContainSubstring("creation of upstream branches failed: ")))
+				Expect(r).To(BeNil())
+			})
+		})
+	})
+
 	Describe("resolve client IP", func() {
 		Context("UDP address", func() {
 			It("should correct resolve client IP", func() {
@@ -755,7 +794,7 @@ var _ = Describe("Running DNS server", func() {
 
 			Expect(cErr).Should(Succeed())
 
-			cfg.Upstream.ExternalResolvers = map[string][]config.Upstream{
+			cfg.Upstreams.Groups = map[string][]config.Upstream{
 				"default": {config.Upstream{Net: config.NetProtocolTcpUdp, Host: "1.1.1.1", Port: 53}},
 			}
 		})
