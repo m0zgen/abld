@@ -1,7 +1,21 @@
-# Blocky Listener Daemon (BLD)
+# Backend Listener Daemon (BLD)
 
 * BLD is a DNS proxy and ad-blocker for the local network written in Go with following features.
+* Uses in OpenBLD.net DNS project as backend DNS server.
 * Based on [Blocky](https://github.com/0xERR0R/blocky).
+
+## Main OpenBLD.net Goals
+
+* Reducing the likelihood of information threats
+* Work without agents and without installing additional software
+* Reducing the load on memory, processor, network
+* Accelerating the loading of web pages
+* Concentration on target information, without being distracted by advertising
+* Reduced heat generation from the computer and its power consumption
+* Blocking adware, spyware, malware, phishing, tracking, telemetry, analytics, ads, banners, popups, etc.
+
+* See more goals details on [Sys-Adm.in Lab](https://lab.sys-adm.in/wiki/getting-started/main-openbld-goals) site.
+* How to Setup and Use OpenBLD.net DoH/DoT - [Setup Manual](https://lab.sys-adm.in/wiki/getting-started/setup) site.
 
 ## Features
 
@@ -61,19 +75,6 @@
     * Single binary
     * Supports x86-64 and ARM architectures -> runs fine on Raspberry PI
     * Community supported Helm chart for k8s deployment
-
-## How to setup
-
-* In [Google Chrome](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-google-chrome)
-* In [Mozilla Firefox](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-mozilla-firefox)
-* In [Brave Browser](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-brave)
-* In [Edge](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-edge)
-* [Android](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-android)
-* [iOS/MacOS](https://github.com/m0zgen/blocky-listener-daemon/wiki#bld-on-ios--macos)
-* [Windows](https://github.com/m0zgen/blocky-listener-daemon/wiki#windows-10)
-* [Routers](https://github.com/m0zgen/blocky-listener-daemon/wiki#routers)
-* [Wiki](https://github.com/m0zgen/blocky-listener-daemon/wiki)
-
 
 ## Quick start
 
