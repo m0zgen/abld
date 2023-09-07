@@ -262,14 +262,6 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 			Title string
 		}
 
-<<<<<<< HEAD
-=======
-		swaggerVersion := "main"
-		if util.Version != "undefined" {
-			swaggerVersion = util.Version
-		}
-
->>>>>>> origin/main
 		type PageData struct {
 			Links     []HandlerLink
 			Version   string
@@ -286,12 +278,16 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 				Title: "Sys-Admin Laboratory",
 			},
 			{
-				URL:   "https://forum.sys-adm.in",
-				Title: "Sys-Admin Forum",
+				URL:   "https://openbld.net",
+				Title: "OpenBLD.net DNS",
 			},
 			{
-				URL:   "https://github.com/m0zgen/blocky-listener-daemon",
-				Title: "BLD Repo",
+				URL:   "https://t.me/sysadm_in_channel",
+				Title: "Official Telegram Channel",
+			},
+			{
+				URL:   "https://github.com/m0zgen/open-bld.git",
+				Title: "OpenBLD Repo",
 			},
 		}
 
