@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -43,6 +44,9 @@ var _ = Describe("QueryLoggingResolver", func() {
 		m          *mockResolver
 		tmpDir     *TmpFolder
 		mockAnswer *dns.Msg
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 	)
 
 	Describe("Type", func() {
@@ -52,6 +56,9 @@ var _ = Describe("QueryLoggingResolver", func() {
 	})
 
 	BeforeEach(func() {
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
 		mockAnswer = new(dns.Msg)
 		tmpDir = NewTmpFolder("queryLoggingResolver")
 		Expect(tmpDir.Error).Should(Succeed())
@@ -63,8 +70,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 			sutConfig.SetDefaults() // not called when using a struct literal
 		}
 
-		sut = NewQueryLoggingResolver(sutConfig)
-		DeferCleanup(func() { close(sut.logChan) })
+		sut = NewQueryLoggingResolver(ctx, sutConfig)
 		m = &mockResolver{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: mockAnswer, Reason: "reason"}, nil)
 		sut.Next(m)
@@ -95,7 +101,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 				}
 			})
 			It("should process request without query logging", func() {
-				Expect(sut.Resolve(newRequest("example.com", A))).
+				Expect(sut.Resolve(ctx, newRequest("example.com", A))).
 					Should(
 						SatisfyAll(
 							HaveResponseType(ResponseTypeRESOLVED),
@@ -117,7 +123,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 			})
 			It("should create a log file per client", func() {
 				By("request from client 1", func() {
-					Expect(sut.Resolve(newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))).
+					Expect(sut.Resolve(ctx, newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -125,7 +131,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 							))
 				})
 				By("request from client 2, has name with special chars, should be escaped", func() {
-					Expect(sut.Resolve(newRequestWithClient(
+					Expect(sut.Resolve(ctx, newRequestWithClient(
 						"example.com.", A, "192.168.178.26", "cl/ient2\\$%&test"))).
 						Should(
 							SatisfyAll(
@@ -151,7 +157,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 						g.Expect(csvLines[0][7]).Should(Equal("NOERROR"))
 						g.Expect(csvLines[0][8]).Should(Equal("RESOLVED"))
 						g.Expect(csvLines[0][9]).Should(Equal("A"))
-					}, "1s").Should(Succeed())
+					}).Should(Succeed())
 				})
 
 				By("check log for client2", func() {
@@ -169,7 +175,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 						g.Expect(csvLines[0][7]).Should(Equal("NOERROR"))
 						g.Expect(csvLines[0][8]).Should(Equal("RESOLVED"))
 						g.Expect(csvLines[0][9]).Should(Equal("A"))
-					}, "1s").Should(Succeed())
+					}).Should(Succeed())
 				})
 			})
 		})
@@ -185,7 +191,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 			})
 			It("should create one log file for all clients", func() {
 				By("request from client 1", func() {
-					Expect(sut.Resolve(newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))).
+					Expect(sut.Resolve(ctx, newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -193,7 +199,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 							))
 				})
 				By("request from client 2, has name with special chars, should be escaped", func() {
-					Expect(sut.Resolve(newRequestWithClient("example.com.", A, "192.168.178.26", "client2"))).
+					Expect(sut.Resolve(ctx, newRequestWithClient("example.com.", A, "192.168.178.26", "client2"))).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -246,7 +252,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 			})
 			It("should create one log file", func() {
 				By("request from client 1", func() {
-					Expect(sut.Resolve(newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))).
+					Expect(sut.Resolve(ctx, newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -294,7 +300,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 				sut.writer = mockWriter
 
 				Eventually(func() int {
-					_, ierr := sut.Resolve(newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))
+					_, ierr := sut.Resolve(ctx, newRequestWithClient("example.com.", A, "192.168.178.25", "client1"))
 					Expect(ierr).Should(Succeed())
 
 					return len(sut.logChan)

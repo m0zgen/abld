@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"time"
 
 	"github.com/0xERR0R/blocky/config"
@@ -20,13 +21,16 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 	)
 
 	var (
-		sut        *StrictResolver
-		sutMapping config.UpstreamGroups
-		sutVerify  bool
+		sut       *StrictResolver
+		upstreams []config.Upstream
+		sutVerify bool
 
 		err error
 
 		bootstrap *Bootstrap
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 	)
 
 	Describe("Type", func() {
@@ -36,15 +40,12 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 	})
 
 	BeforeEach(func() {
-		sutMapping = config.UpstreamGroups{
-			upstreamDefaultCfgName: {
-				config.Upstream{
-					Host: "wrong",
-				},
-				config.Upstream{
-					Host: "127.0.0.2",
-				},
-			},
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
+		upstreams = []config.Upstream{
+			{Host: "wrong"},
+			{Host: "127.0.0.2"},
 		}
 
 		sutVerify = noVerifyUpstreams
@@ -53,12 +54,12 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 	})
 
 	JustBeforeEach(func() {
-		sutConfig := config.UpstreamsConfig{Groups: sutMapping}
+		upstreamsCfg := defaultUpstreamsConfig
+		upstreamsCfg.StartVerify = sutVerify
 
-		sut, err = NewStrictResolver(sutConfig, bootstrap, sutVerify)
+		sutConfig := config.NewUpstreamGroup("test", upstreamsCfg, upstreams)
+		sut, err = NewStrictResolver(ctx, sutConfig, bootstrap)
 	})
-
-	config.GetConfig().Upstreams.Timeout = config.Duration(1000 * time.Millisecond)
 
 	Describe("IsEnabled", func() {
 		It("is true", func() {
@@ -91,41 +92,30 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 	})
 
 	When("some default upstream resolvers cannot be reached", func() {
-		It("should start normally", func() {
+		BeforeEach(func() {
 			mockUpstream := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
 				response, _ = util.NewMsgWithAnswer(request.Question[0].Name, 123, A, "123.124.122.122")
 
 				return
 			})
-			defer mockUpstream.Close()
+			DeferCleanup(mockUpstream.Close)
 
-			upstream := config.UpstreamGroups{
-				upstreamDefaultCfgName: {
-					config.Upstream{
-						Host: "wrong",
-					},
-					mockUpstream.Start(),
-				},
+			upstreams = []config.Upstream{
+				{Host: "wrong"},
+				mockUpstream.Start(),
 			}
+		})
 
-			_, err := NewStrictResolver(config.UpstreamsConfig{
-				Groups: upstream,
-			}, systemResolverBootstrap, verifyUpstreams)
+		It("should start normally", func() {
 			Expect(err).Should(Not(HaveOccurred()))
 		})
 	})
 
 	When("no upstream resolvers can be reached", func() {
 		BeforeEach(func() {
-			sutMapping = config.UpstreamGroups{
-				upstreamDefaultCfgName: {
-					config.Upstream{
-						Host: "wrong",
-					},
-					config.Upstream{
-						Host: "127.0.0.2",
-					},
-				},
+			upstreams = []config.Upstream{
+				{Host: "wrong"},
+				{Host: "127.0.0.2"},
 			}
 		})
 
@@ -159,13 +149,11 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 						testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.123")
 						DeferCleanup(testUpstream2.Close)
 
-						sutMapping = config.UpstreamGroups{
-							upstreamDefaultCfgName: {testUpstream1.Start(), testUpstream2.Start()},
-						}
+						upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 					})
 					It("Should use result from first one", func() {
 						request := newRequest("example.com.", A)
-						Expect(sut.Resolve(request)).
+						Expect(sut.Resolve(ctx, request)).
 							Should(
 								SatisfyAll(
 									BeDNSRecord("example.com.", A, "123.124.122.122"),
@@ -177,9 +165,10 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 				})
 				When("first upstream exceeds upstreamTimeout", func() {
 					BeforeEach(func() {
+						timeout := sut.cfg.Timeout.ToDuration()
 						testUpstream1 := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
 							response, err := util.NewMsgWithAnswer("example.com", 123, A, "123.124.122.1")
-							time.Sleep(time.Duration(config.GetConfig().Upstreams.Timeout) + 2*time.Second)
+							time.Sleep(2 * timeout)
 
 							Expect(err).To(Succeed())
 
@@ -190,13 +179,11 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 						testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.2")
 						DeferCleanup(testUpstream2.Close)
 
-						sutMapping = config.UpstreamGroups{
-							upstreamDefaultCfgName: {testUpstream1.Start(), testUpstream2.Start()},
-						}
+						upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 					})
 					It("should return response from next upstream", func() {
 						request := newRequest("example.com", A)
-						Expect(sut.Resolve(request)).Should(
+						Expect(sut.Resolve(ctx, request)).Should(
 							SatisfyAll(
 								BeDNSRecord("example.com.", A, "123.124.122.2"),
 								HaveTTL(BeNumerically("==", 123)),
@@ -207,9 +194,10 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 				})
 				When("all upstreams exceed upsteamTimeout", func() {
 					BeforeEach(func() {
+						timeout := sut.cfg.Timeout.ToDuration()
 						testUpstream1 := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
 							response, err := util.NewMsgWithAnswer("example.com", 123, A, "123.124.122.1")
-							time.Sleep(config.GetConfig().Upstreams.Timeout.ToDuration() + 2*time.Second)
+							time.Sleep(2 * timeout)
 
 							Expect(err).To(Succeed())
 
@@ -219,21 +207,18 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 
 						testUpstream2 := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
 							response, err := util.NewMsgWithAnswer("example.com", 123, A, "123.124.122.2")
-							time.Sleep(config.GetConfig().Upstreams.Timeout.ToDuration() + 2*time.Second)
+							time.Sleep(2 * timeout)
 
 							Expect(err).To(Succeed())
 
 							return response
 						})
 						DeferCleanup(testUpstream2.Close)
-
-						sutMapping = config.UpstreamGroups{
-							upstreamDefaultCfgName: {testUpstream1.Start(), testUpstream2.Start()},
-						}
+						upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 					})
 					It("should return error", func() {
 						request := newRequest("example.com", A)
-						_, err := sut.Resolve(request)
+						_, err := sut.Resolve(ctx, request)
 						Expect(err).To(HaveOccurred())
 					})
 				})
@@ -245,13 +230,11 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 					testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.123")
 					DeferCleanup(testUpstream2.Close)
 
-					sutMapping = config.UpstreamGroups{
-						upstreamDefaultCfgName: {testUpstream1, testUpstream2.Start()},
-					}
+					upstreams = []config.Upstream{testUpstream1, testUpstream2.Start()}
 				})
 				It("Should use result from second one", func() {
 					request := newRequest("example.com.", A)
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								BeDNSRecord("example.com.", A, "123.124.122.123"),
@@ -263,17 +246,12 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 			})
 			When("None are working", func() {
 				BeforeEach(func() {
-					testUpstream1 := config.Upstream{Host: "wrong"}
-					testUpstream2 := config.Upstream{Host: "wrong"}
-
-					sutMapping = config.UpstreamGroups{
-						upstreamDefaultCfgName: {testUpstream1, testUpstream2},
-					}
+					upstreams = []config.Upstream{{Host: "wrong"}, {Host: "wrong"}}
 					Expect(err).Should(Succeed())
 				})
 				It("Should return error", func() {
 					request := newRequest("example.com.", A)
-					_, err := sut.Resolve(request)
+					_, err = sut.Resolve(ctx, request)
 					Expect(err).Should(HaveOccurred())
 				})
 			})
@@ -283,16 +261,12 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 				mockUpstream := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
 				DeferCleanup(mockUpstream.Close)
 
-				sutMapping = config.UpstreamGroups{
-					upstreamDefaultCfgName: {
-						mockUpstream.Start(),
-					},
-				}
+				upstreams = []config.Upstream{mockUpstream.Start()}
 			})
 			It("Should use result from defined resolver", func() {
 				request := newRequest("example.com.", A)
 
-				Expect(sut.Resolve(request)).
+				Expect(sut.Resolve(ctx, request)).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("example.com.", A, "123.124.122.122"),

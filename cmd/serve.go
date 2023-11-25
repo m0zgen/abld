@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 var (
 	done              = make(chan bool, 1)
 	isConfigMandatory = true
+	signals           = make(chan os.Signal, 1)
 )
 
 func newServeCommand() *cobra.Command {
@@ -38,13 +40,14 @@ func startServer(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("unable to load configuration: %w", err)
 	}
 
-	log.ConfigureLogger(&cfg.Log)
-
-	signals := make(chan os.Signal, 1)
+	log.Configure(&cfg.Log)
 
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	srv, err := server.NewServer(cfg)
+	ctx, cancelFn := context.WithCancel(context.Background())
+	defer cancelFn()
+
+	srv, err := server.NewServer(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("can't start server: %w", err)
 	}
@@ -52,7 +55,9 @@ func startServer(_ *cobra.Command, _ []string) error {
 	const errChanSize = 10
 	errChan := make(chan error, errChanSize)
 
-	srv.Start(errChan)
+	srv.Start(ctx, errChan)
+
+	var terminationErr error
 
 	go func() {
 		select {
@@ -63,6 +68,7 @@ func startServer(_ *cobra.Command, _ []string) error {
 
 		case err := <-errChan:
 			log.Log().Error("server start failed: ", err)
+			terminationErr = err
 			done <- true
 		}
 	}()
@@ -70,7 +76,7 @@ func startServer(_ *cobra.Command, _ []string) error {
 	evt.Bus().Publish(evt.ApplicationStarted, util.Version, util.BuildTime)
 	<-done
 
-	return nil
+	return terminationErr
 }
 
 func printBanner() {

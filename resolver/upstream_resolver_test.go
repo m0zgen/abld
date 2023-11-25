@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
@@ -20,11 +21,17 @@ import (
 var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 	var (
 		sut       *UpstreamResolver
-		sutConfig config.Upstream
+		sutConfig upstreamConfig
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 	)
 
 	BeforeEach(func() {
-		sutConfig = config.Upstream{Host: "localhost"}
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
+		sutConfig = newUpstreamConfig(config.Upstream{Host: "localhost"}, defaultUpstreamsConfig)
 	})
 
 	JustBeforeEach(func() {
@@ -59,17 +66,17 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				mockUpstream := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
 				DeferCleanup(mockUpstream.Close)
 
-				upstream := mockUpstream.Start()
-				sut := newUpstreamResolverUnchecked(upstream, nil)
+				sutConfig.Upstream = mockUpstream.Start()
+				sut := newUpstreamResolverUnchecked(sutConfig, nil)
 
-				Expect(sut.Resolve(newRequest("example.com.", A))).
+				Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("example.com.", A, "123.124.122.122"),
 							HaveResponseType(ResponseTypeRESOLVED),
 							HaveReturnCode(dns.RcodeSuccess),
 							HaveTTL(BeNumerically("==", 123)),
-							HaveReason(fmt.Sprintf("RESOLVED (%s)", upstream))),
+							HaveReason(fmt.Sprintf("RESOLVED (%s)", sutConfig.Upstream))),
 					)
 			})
 		})
@@ -78,16 +85,16 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				mockUpstream := NewMockUDPUpstreamServer().WithAnswerError(dns.RcodeNameError)
 				DeferCleanup(mockUpstream.Close)
 
-				upstream := mockUpstream.Start()
-				sut := newUpstreamResolverUnchecked(upstream, nil)
+				sutConfig.Upstream = mockUpstream.Start()
+				sut := newUpstreamResolverUnchecked(sutConfig, nil)
 
-				Expect(sut.Resolve(newRequest("example.com.", A))).
+				Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 					Should(
 						SatisfyAll(
 							HaveNoAnswer(),
 							HaveResponseType(ResponseTypeRESOLVED),
 							HaveReturnCode(dns.RcodeNameError),
-							HaveReason(fmt.Sprintf("RESOLVED (%s)", upstream))),
+							HaveReason(fmt.Sprintf("RESOLVED (%s)", sutConfig.Upstream))),
 					)
 			})
 		})
@@ -97,43 +104,43 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 					return nil
 				})
 				DeferCleanup(mockUpstream.Close)
-				upstream := mockUpstream.Start()
-				sut := newUpstreamResolverUnchecked(upstream, nil)
+				sutConfig.Upstream = mockUpstream.Start()
+				sut := newUpstreamResolverUnchecked(sutConfig, nil)
 
-				_, err := sut.Resolve(newRequest("example.com.", A))
+				_, err := sut.Resolve(ctx, newRequest("example.com.", A))
 				Expect(err).Should(HaveOccurred())
 			})
 		})
 		When("Timeout occurs", func() {
 			var counter int32
 			var attemptsWithTimeout int32
-			var sut *UpstreamResolver
 			BeforeEach(func() {
-				resolveFn := func(request *dns.Msg) (response *dns.Msg) {
-					atomic.AddInt32(&counter, 1)
+				timeout := sutConfig.Timeout.ToDuration() // avoid data race
+
+				resolveFn := func(request *dns.Msg) *dns.Msg {
 					// timeout on first x attempts
-					if atomic.LoadInt32(&counter) <= atomic.LoadInt32(&attemptsWithTimeout) {
-						time.Sleep(110 * time.Millisecond)
+					if atomic.AddInt32(&counter, 1) <= atomic.LoadInt32(&attemptsWithTimeout) {
+						time.Sleep(2 * timeout)
 					}
+
 					response, err := util.NewMsgWithAnswer("example.com", 123, A, "123.124.122.122")
 					Expect(err).Should(Succeed())
 
 					return response
 				}
+
 				mockUpstream := NewMockUDPUpstreamServer().WithAnswerFn(resolveFn)
 				DeferCleanup(mockUpstream.Close)
 
-				upstream := mockUpstream.Start()
-
-				sut = newUpstreamResolverUnchecked(upstream, nil)
-				sut.upstreamClient.(*dnsUpstreamClient).udpClient.Timeout = 100 * time.Millisecond
+				sutConfig.Upstream = mockUpstream.Start()
 			})
+
 			It("should perform a retry with 3 attempts", func() {
 				By("2 attempts with timeout -> should resolve with third attempt", func() {
 					atomic.StoreInt32(&counter, 0)
 					atomic.StoreInt32(&attemptsWithTimeout, 2)
 
-					Expect(sut.Resolve(newRequest("example.com.", A))).
+					Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 						Should(
 							SatisfyAll(
 								BeDNSRecord("example.com.", A, "123.124.122.122"),
@@ -146,9 +153,34 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				By("3 attempts with timeout -> should return error", func() {
 					atomic.StoreInt32(&counter, 0)
 					atomic.StoreInt32(&attemptsWithTimeout, 3)
-					_, err := sut.Resolve(newRequest("example.com.", A))
+					_, err := sut.Resolve(ctx, newRequest("example.com.", A))
 					Expect(err).Should(HaveOccurred())
 					Expect(err.Error()).Should(ContainSubstring("i/o timeout"))
+				})
+			})
+		})
+
+		When("user request is TCP", func() {
+			When("TCP upstream connection fails", func() {
+				BeforeEach(func() {
+					mockUpstream := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
+					DeferCleanup(mockUpstream.Close)
+
+					sutConfig.Upstream = mockUpstream.Start()
+				})
+
+				It("should retry with UDP", func() {
+					req := newRequest("example.com.", A)
+					req.Protocol = RequestProtocolTCP
+
+					Expect(sut.Resolve(ctx, req)).
+						Should(
+							SatisfyAll(
+								BeDNSRecord("example.com.", A, "123.124.122.122"),
+								HaveResponseType(ResponseTypeRESOLVED),
+								HaveReturnCode(dns.RcodeSuccess),
+								HaveTTL(BeNumerically("==", 123)),
+							))
 				})
 			})
 		})
@@ -156,8 +188,6 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 
 	Describe("Using Dns over HTTP (DOH) upstream", func() {
 		var (
-			sut              *UpstreamResolver
-			upstream         config.Upstream
 			respFn           func(request *dns.Msg) (response *dns.Msg)
 			modifyHTTPRespFn func(w http.ResponseWriter)
 		)
@@ -173,8 +203,8 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 		})
 
 		JustBeforeEach(func() {
-			upstream = newTestDOHUpstream(respFn, modifyHTTPRespFn)
-			sut = newUpstreamResolverUnchecked(upstream, nil)
+			sutConfig.Upstream = newTestDOHUpstream(respFn, modifyHTTPRespFn)
+			sut = newUpstreamResolverUnchecked(sutConfig, nil)
 
 			// use insecure certificates for test doh upstream
 			sut.upstreamClient.(*httpUpstreamClient).client.Transport = &http.Transport{
@@ -185,14 +215,14 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 		})
 		When("Configured DOH resolver can resolve query", func() {
 			It("should return answer from DNS upstream", func() {
-				Expect(sut.Resolve(newRequest("example.com.", A))).
+				Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("example.com.", A, "123.124.122.122"),
 							HaveResponseType(ResponseTypeRESOLVED),
 							HaveReturnCode(dns.RcodeSuccess),
 							HaveTTL(BeNumerically("==", 123)),
-							HaveReason(fmt.Sprintf("RESOLVED (https://%s:%d)", upstream.Host, upstream.Port)),
+							HaveReason(fmt.Sprintf("RESOLVED (%s)", sutConfig.Upstream)),
 						))
 			})
 		})
@@ -203,7 +233,7 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				}
 			})
 			It("should return error", func() {
-				_, err := sut.Resolve(newRequest("example.com.", A))
+				_, err := sut.Resolve(ctx, newRequest("example.com.", A))
 				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring("http return code should be 200, but received 500"))
 			})
@@ -215,7 +245,7 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				}
 			})
 			It("should return error", func() {
-				_, err := sut.Resolve(newRequest("example.com.", A))
+				_, err := sut.Resolve(ctx, newRequest("example.com.", A))
 				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(
 					ContainSubstring("http return content type should be 'application/dns-message', but was 'text'"))
@@ -228,20 +258,22 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				}
 			})
 			It("should return error", func() {
-				_, err := sut.Resolve(newRequest("example.com.", A))
+				_, err := sut.Resolve(ctx, newRequest("example.com.", A))
 				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring("can't unpack message"))
 			})
 		})
 		When("Configured DOH resolver does not respond", func() {
 			JustBeforeEach(func() {
-				sut = newUpstreamResolverUnchecked(config.Upstream{
+				sutConfig.Upstream = config.Upstream{
 					Net:  config.NetProtocolHttps,
 					Host: "wronghost.example.com",
-				}, systemResolverBootstrap)
+				}
+
+				sut = newUpstreamResolverUnchecked(sutConfig, systemResolverBootstrap)
 			})
 			It("should return error", func() {
-				_, err := sut.Resolve(newRequest("example.com.", A))
+				_, err := sut.Resolve(ctx, newRequest("example.com.", A))
 				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(Or(
 					ContainSubstring("no such host"),

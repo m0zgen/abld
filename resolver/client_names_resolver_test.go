@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"errors"
 	"net"
 
@@ -19,8 +20,11 @@ import (
 var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 	var (
 		sut       *ClientNamesResolver
-		sutConfig config.ClientLookupConfig
+		sutConfig config.ClientLookup
 		m         *mockResolver
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 	)
 
 	Describe("Type", func() {
@@ -32,7 +36,10 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 	JustBeforeEach(func() {
 		var err error
 
-		sut, err = NewClientNamesResolver(sutConfig, nil, false)
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
+		sut, err = NewClientNamesResolver(ctx, sutConfig, defaultUpstreamsConfig, nil)
 		Expect(err).Should(Succeed())
 		m = &mockResolver{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: new(dns.Msg)}, nil)
@@ -57,7 +64,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 	Describe("Resolve client name from request clientID", func() {
 		BeforeEach(func() {
-			sutConfig = config.ClientLookupConfig{}
+			sutConfig = config.ClientLookup{}
 		})
 		AfterEach(func() {
 			// next resolver will be called
@@ -66,7 +73,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 		It("should use clientID if set", func() {
 			request := newRequestWithClientID("google1.de.", dns.Type(dns.TypeA), "1.2.3.4", "client123")
-			Expect(sut.Resolve(request)).
+			Expect(sut.Resolve(ctx, request)).
 				Should(
 					SatisfyAll(
 						HaveResponseType(ResponseTypeRESOLVED),
@@ -77,7 +84,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 		})
 		It("should use IP as fallback if clientID not set", func() {
 			request := newRequestWithClientID("google2.de.", dns.Type(dns.TypeA), "1.2.3.4", "")
-			Expect(sut.Resolve(request)).
+			Expect(sut.Resolve(ctx, request)).
 				Should(
 					SatisfyAll(
 						HaveResponseType(ResponseTypeRESOLVED),
@@ -89,7 +96,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 	})
 	Describe("Resolve client name with custom name mapping", Label("XXX"), func() {
 		BeforeEach(func() {
-			sutConfig = config.ClientLookupConfig{
+			sutConfig = config.ClientLookup{
 				ClientnameIPMapping: map[string][]net.IP{
 					"client7": {
 						net.ParseIP("1.2.3.4"), net.ParseIP("1.2.3.5"), net.ParseIP("2a02:590:505:4700:2e4f:1503:ce74:df78"),
@@ -107,7 +114,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 		It("should resolve defined name with ipv4 address", func() {
 			request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "1.2.3.4")
-			Expect(sut.Resolve(request)).
+			Expect(sut.Resolve(ctx, request)).
 				Should(
 					SatisfyAll(
 						HaveResponseType(ResponseTypeRESOLVED),
@@ -119,7 +126,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 		It("should resolve defined name with ipv6 address", func() {
 			request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "2a02:590:505:4700:2e4f:1503:ce74:df78")
-			Expect(sut.Resolve(request)).
+			Expect(sut.Resolve(ctx, request)).
 				Should(
 					SatisfyAll(
 						HaveResponseType(ResponseTypeRESOLVED),
@@ -130,7 +137,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 		})
 		It("should resolve multiple names defined names", func() {
 			request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "1.2.3.5")
-			Expect(sut.Resolve(request)).
+			Expect(sut.Resolve(ctx, request)).
 				Should(
 					SatisfyAll(
 						HaveResponseType(ResponseTypeRESOLVED),
@@ -155,7 +162,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerRR("25.178.168.192.in-addr.arpa. 600 IN PTR host1")
 					DeferCleanup(testUpstream.Close)
-					sutConfig = config.ClientLookupConfig{
+					sutConfig = config.ClientLookup{
 						Upstream: testUpstream.Start(),
 					}
 				})
@@ -163,7 +170,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 				It("should resolve client name", func() {
 					By("first request", func() {
 						request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-						Expect(sut.Resolve(request)).
+						Expect(sut.Resolve(ctx, request)).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -175,7 +182,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 					By("second request", func() {
 						request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-						Expect(sut.Resolve(request)).
+						Expect(sut.Resolve(ctx, request)).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -193,7 +200,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 					By("third request", func() {
 						request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-						Expect(sut.Resolve(request)).
+						Expect(sut.Resolve(ctx, request)).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -211,14 +218,14 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerRR("25.178.168.192.in-addr.arpa. 600 IN PTR myhost1", "25.178.168.192.in-addr.arpa. 600 IN PTR myhost2")
 					DeferCleanup(testUpstream.Close)
-					sutConfig = config.ClientLookupConfig{
+					sutConfig = config.ClientLookup{
 						Upstream: testUpstream.Start(),
 					}
 				})
 
 				It("should resolve all client names", func() {
 					request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -232,7 +239,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 		})
 		Context("with order", func() {
 			BeforeEach(func() {
-				sutConfig = config.ClientLookupConfig{
+				sutConfig = config.ClientLookup{
 					SingleNameOrder: []uint{2, 1},
 				}
 			})
@@ -246,7 +253,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 				It("should resolve client name", func() {
 					request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -267,7 +274,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 				It("should resolve the client name depending to defined order", func() {
 					request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -286,14 +293,14 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerError(dns.RcodeNameError)
 					DeferCleanup(testUpstream.Close)
-					sutConfig = config.ClientLookupConfig{
+					sutConfig = config.ClientLookup{
 						Upstream: testUpstream.Start(),
 					}
 				})
 
 				It("should use fallback for client name", func() {
 					request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -306,14 +313,14 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 			})
 			When("Upstream produces error", func() {
 				JustBeforeEach(func() {
-					sutConfig = config.ClientLookupConfig{}
+					sutConfig = config.ClientLookup{}
 					clientMockResolver := &mockResolver{}
 					clientMockResolver.On("Resolve", mock.Anything).Return(nil, errors.New("error"))
 					sut.externalResolver = clientMockResolver
 				})
 				It("should use fallback for client name", func() {
 					request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -326,11 +333,11 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 			When("Client has no IP", func() {
 				BeforeEach(func() {
-					sutConfig = config.ClientLookupConfig{}
+					sutConfig = config.ClientLookup{}
 				})
 				It("should resolve no names", func() {
 					request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "")
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -342,11 +349,11 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 			When("No upstream is defined", func() {
 				BeforeEach(func() {
-					sutConfig = config.ClientLookupConfig{}
+					sutConfig = config.ClientLookup{}
 				})
 				It("should use fallback for client name", func() {
 					request := newRequestWithClient("google.de.", dns.Type(dns.TypeA), "192.168.178.25")
-					Expect(sut.Resolve(request)).
+					Expect(sut.Resolve(ctx, request)).
 						Should(
 							SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
@@ -361,11 +368,14 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 	Describe("Connstruction", func() {
 		When("upstream is invalid", func() {
 			It("errors during construction", func() {
-				b := newTestBootstrap(&dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeServerFailure}})
+				b := newTestBootstrap(ctx, &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeServerFailure}})
 
-				r, err := NewClientNamesResolver(config.ClientLookupConfig{
+				upstreamsCfg := defaultUpstreamsConfig
+				upstreamsCfg.StartVerify = true
+
+				r, err := NewClientNamesResolver(ctx, config.ClientLookup{
 					Upstream: config.Upstream{Host: "example.com"},
-				}, b, true)
+				}, upstreamsCfg, b)
 
 				Expect(err).ShouldNot(Succeed())
 				Expect(r).Should(BeNil())

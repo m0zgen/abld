@@ -7,7 +7,10 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
+	"github.com/creasty/defaults"
+	"github.com/mattn/go-colorable"
 	"github.com/sirupsen/logrus"
 	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 	"golang.org/x/exp/maps"
@@ -18,7 +21,10 @@ const prefixField = "prefix"
 // Logger is the global logging instance
 //
 //nolint:gochecknoglobals
-var logger *logrus.Logger
+var (
+	logger   *logrus.Logger
+	initDone atomic.Bool
+)
 
 // FormatType format for logging ENUM(
 // text // logging as text
@@ -44,18 +50,26 @@ type Config struct {
 	Timestamp bool       `yaml:"timestamp" default:"true"`
 }
 
+// DefaultConfig returns a new Config initialized with default values.
+func DefaultConfig() *Config {
+	cfg := new(Config)
+
+	defaults.MustSet(cfg)
+
+	return cfg
+}
+
 //nolint:gochecknoinits
 func init() {
-	logger = logrus.New()
-
-	defaultConfig := &Config{
-		Level:     LevelInfo,
-		Format:    FormatTypeText,
-		Privacy:   false,
-		Timestamp: true,
+	if !initDone.CompareAndSwap(false, true) {
+		return
 	}
 
-	ConfigureLogger(defaultConfig)
+	newLogger := logrus.New()
+
+	ConfigureLogger(newLogger, DefaultConfig())
+
+	logger = newLogger
 }
 
 // Log returns the global logger
@@ -85,8 +99,13 @@ func EscapeInput(input string) string {
 	return result
 }
 
-// ConfigureLogger applies configuration to the global logger
-func ConfigureLogger(cfg *Config) {
+// Configure applies configuration to the global logger.
+func Configure(cfg *Config) {
+	ConfigureLogger(logger, cfg)
+}
+
+// Configure applies configuration to the given logger.
+func ConfigureLogger(logger *logrus.Logger, cfg *Config) {
 	if level, err := logrus.ParseLevel(cfg.Level.String()); err != nil {
 		logger.Fatalf("invalid log level %s %v", cfg.Level, err)
 	} else {
@@ -111,6 +130,9 @@ func ConfigureLogger(cfg *Config) {
 
 		logger.SetFormatter(logFormatter)
 
+		// Windows does not support ANSI colors
+		logger.SetOutput(colorable.NewColorableStdout())
+
 	case FormatTypeJson:
 		logger.SetFormatter(&logrus.JSONFormatter{})
 	}
@@ -118,7 +140,20 @@ func ConfigureLogger(cfg *Config) {
 
 // Silence disables the logger output
 func Silence() {
-	logger.Out = io.Discard
+	initDone.Store(true)
+
+	logger = logrus.New()
+
+	logger.SetFormatter(nopFormatter{}) // skip expensive formatting
+
+	// not actually needed but doesn't hurt
+	logger.SetOutput(io.Discard)
+}
+
+type nopFormatter struct{}
+
+func (f nopFormatter) Format(*logrus.Entry) ([]byte, error) {
+	return nil, nil
 }
 
 func WithIndent(log *logrus.Entry, prefix string, callback func(*logrus.Entry)) {

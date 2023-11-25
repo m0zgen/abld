@@ -1,30 +1,38 @@
 package resolver
 
 import (
+	"context"
+
 	"github.com/0xERR0R/blocky/config"
 	"github.com/0xERR0R/blocky/model"
+	"github.com/0xERR0R/blocky/util"
 	"github.com/miekg/dns"
 )
 
-type EdeResolver struct {
-	configurable[*config.EdeConfig]
+// A EDEResolver is responsible for adding the reason for the response as EDNS0 option
+type EDEResolver struct {
+	configurable[*config.EDE]
 	NextResolver
 	typed
 }
 
-func NewEdeResolver(cfg config.EdeConfig) *EdeResolver {
-	return &EdeResolver{
+// NewEDEResolver creates new resolver instance which adds the reason for
+// the response as EDNS0 option to the response if it is enabled in the configuration
+func NewEDEResolver(cfg config.EDE) *EDEResolver {
+	return &EDEResolver{
 		configurable: withConfig(&cfg),
 		typed:        withType("extended_error_code"),
 	}
 }
 
-func (r *EdeResolver) Resolve(request *model.Request) (*model.Response, error) {
+// Resolve adds the reason as EDNS0 option to the response of the next resolver
+// if it is enabled in the configuration
+func (r *EDEResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
 	if !r.cfg.Enable {
-		return r.next.Resolve(request)
+		return r.next.Resolve(ctx, request)
 	}
 
-	resp, err := r.next.Resolve(request)
+	resp, err := r.next.Resolve(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +42,8 @@ func (r *EdeResolver) Resolve(request *model.Request) (*model.Response, error) {
 	return resp, nil
 }
 
-func (r *EdeResolver) addExtraReasoning(res *model.Response) {
+// addExtraReasoning adds the reason for the response as EDNS0 option
+func (r *EDEResolver) addExtraReasoning(res *model.Response) {
 	infocode := res.RType.ToExtendedErrorCode()
 
 	if infocode == dns.ExtendedErrorCodeOther {
@@ -42,12 +51,9 @@ func (r *EdeResolver) addExtraReasoning(res *model.Response) {
 		return
 	}
 
-	opt := new(dns.OPT)
-	opt.Hdr.Name = "."
-	opt.Hdr.Rrtype = dns.TypeOPT
-	opt.Option = append(opt.Option, &dns.EDNS0_EDE{
-		InfoCode:  infocode,
-		ExtraText: res.Reason,
-	})
-	res.Res.Extra = append(res.Res.Extra, opt)
+	edeOption := new(dns.EDNS0_EDE)
+	edeOption.InfoCode = infocode
+	edeOption.ExtraText = res.Reason
+
+	util.SetEdns0Option(res.Res, edeOption)
 }

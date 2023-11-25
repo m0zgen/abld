@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"context"
+	"fmt"
 	"net"
 	"time"
 
@@ -73,7 +75,7 @@ type Resolver interface {
 	Type() string
 
 	// Resolve performs resolution of a DNS request
-	Resolve(req *model.Request) (*model.Response, error)
+	Resolve(ctx context.Context, req *model.Request) (*model.Response, error)
 }
 
 // ChainedResolver represents a resolver, which can delegate result to the next one
@@ -109,7 +111,7 @@ type NamedResolver interface {
 }
 
 // Chain creates a chain of resolvers
-func Chain(resolvers ...Resolver) Resolver {
+func Chain(resolvers ...Resolver) ChainedResolver {
 	for i, res := range resolvers {
 		if i+1 < len(resolvers) {
 			if cr, ok := res.(ChainedResolver); ok {
@@ -118,7 +120,23 @@ func Chain(resolvers ...Resolver) Resolver {
 		}
 	}
 
-	return resolvers[0]
+	return resolvers[0].(ChainedResolver)
+}
+
+func GetFromChainWithType[T any](resolver ChainedResolver) (result T, err error) {
+	for resolver != nil {
+		if result, found := resolver.(T); found {
+			return result, nil
+		}
+
+		if cr, ok := resolver.GetNext().(ChainedResolver); ok {
+			resolver = cr
+		} else {
+			break
+		}
+	}
+
+	return result, fmt.Errorf("type was not found in the chain")
 }
 
 // Name returns a user-friendly name of a resolver
@@ -196,4 +214,42 @@ func (c *configurable[T]) IsEnabled() bool {
 // LogConfig implements `config.Configurable`.
 func (c *configurable[T]) LogConfig(logger *logrus.Entry) {
 	c.cfg.LogConfig(logger)
+}
+
+func createResolvers(
+	ctx context.Context, logger *logrus.Entry,
+	cfg config.UpstreamGroup, bootstrap *Bootstrap,
+) ([]Resolver, error) {
+	if len(cfg.GroupUpstreams()) == 0 {
+		return nil, fmt.Errorf("no external DNS resolvers configured for group %s", cfg.Name)
+	}
+
+	resolvers := make([]Resolver, 0, len(cfg.GroupUpstreams()))
+	hasValidResolvers := false
+
+	for _, u := range cfg.GroupUpstreams() {
+		resolver, err := NewUpstreamResolver(ctx, newUpstreamConfig(u, cfg.Upstreams), bootstrap)
+		if err != nil {
+			logger.Warnf("upstream group %s: %v", cfg.Name, err)
+
+			continue
+		}
+
+		if cfg.StartVerify {
+			err = resolver.testResolve(ctx)
+			if err != nil {
+				logger.Warn(err)
+			} else {
+				hasValidResolvers = true
+			}
+		}
+
+		resolvers = append(resolvers, resolver)
+	}
+
+	if cfg.StartVerify && !hasValidResolvers {
+		return nil, fmt.Errorf("no valid upstream for group %s", cfg.Name)
+	}
+
+	return resolvers, nil
 }

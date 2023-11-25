@@ -21,75 +21,34 @@ const (
 // StrictResolver delegates the DNS message strictly to the first configured upstream resolver
 // if it can't provide the answer in time the next resolver is used
 type StrictResolver struct {
-	configurable[*config.UpstreamsConfig]
+	configurable[*config.UpstreamGroup]
 	typed
 
-	resolversPerClient map[string][]*upstreamResolverStatus
+	resolvers []*upstreamResolverStatus
 }
 
-// NewStrictResolver creates new resolver instance
+// NewStrictResolver creates a new strict resolver instance
 func NewStrictResolver(
-	cfg config.UpstreamsConfig, bootstrap *Bootstrap, shouldVerifyUpstreams bool,
+	ctx context.Context, cfg config.UpstreamGroup, bootstrap *Bootstrap,
 ) (*StrictResolver, error) {
 	logger := log.PrefixedLog(strictResolverType)
 
-	upstreamResolvers := cfg.Groups
-	resolverGroups := make(map[string][]Resolver, len(upstreamResolvers))
-
-	for name, upstreamCfgs := range upstreamResolvers {
-		group := make([]Resolver, 0, len(upstreamCfgs))
-		hasValidResolver := false
-
-		for _, u := range upstreamCfgs {
-			resolver, err := NewUpstreamResolver(u, bootstrap, shouldVerifyUpstreams)
-			if err != nil {
-				logger.Warnf("upstream group %s: %v", name, err)
-
-				continue
-			}
-
-			if shouldVerifyUpstreams {
-				err = testResolver(resolver)
-				if err != nil {
-					logger.Warn(err)
-				} else {
-					hasValidResolver = true
-				}
-			}
-
-			group = append(group, resolver)
-		}
-
-		if shouldVerifyUpstreams && !hasValidResolver {
-			return nil, fmt.Errorf("no valid upstream for group %s", name)
-		}
-
-		resolverGroups[name] = group
+	resolvers, err := createResolvers(ctx, logger, cfg, bootstrap)
+	if err != nil {
+		return nil, err
 	}
 
-	return newStrictResolver(cfg, resolverGroups), nil
+	return newStrictResolver(cfg, resolvers), nil
 }
 
 func newStrictResolver(
-	cfg config.UpstreamsConfig, resolverGroups map[string][]Resolver,
+	cfg config.UpstreamGroup, resolvers []Resolver,
 ) *StrictResolver {
-	resolversPerClient := make(map[string][]*upstreamResolverStatus, len(resolverGroups))
-
-	for groupName, resolvers := range resolverGroups {
-		resolverStatuses := make([]*upstreamResolverStatus, 0, len(resolvers))
-
-		for _, r := range resolvers {
-			resolverStatuses = append(resolverStatuses, newUpstreamResolverStatus(r))
-		}
-
-		resolversPerClient[groupName] = resolverStatuses
-	}
-
 	r := StrictResolver{
 		configurable: withConfig(&cfg),
 		typed:        withType(strictResolverType),
 
-		resolversPerClient: resolversPerClient,
+		resolvers: newUpstreamResolverStatuses(resolvers),
 	}
 
 	return &r
@@ -100,65 +59,36 @@ func (r *StrictResolver) Name() string {
 }
 
 func (r *StrictResolver) String() string {
-	result := make([]string, 0, len(r.resolversPerClient))
-
-	for name, res := range r.resolversPerClient {
-		tmp := make([]string, len(res))
-		for i, s := range res {
-			tmp[i] = fmt.Sprintf("%s", s.resolver)
-		}
-
-		result = append(result, fmt.Sprintf("%s (%s)", name, strings.Join(tmp, ",")))
+	result := make([]string, len(r.resolvers))
+	for i, s := range r.resolvers {
+		result[i] = fmt.Sprintf("%s", s.resolver)
 	}
 
-	return fmt.Sprintf("%s upstreams %q", strictResolverType, strings.Join(result, "; "))
+	return fmt.Sprintf("%s upstreams '%s (%s)'", strictResolverType, r.cfg.Name, strings.Join(result, ","))
 }
 
-// Resolve sends the query request to multiple upstream resolvers and returns the fastest result
-func (r *StrictResolver) Resolve(request *model.Request) (*model.Response, error) {
+// Resolve sends the query request in a strict order to the upstream resolvers
+func (r *StrictResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
 	logger := log.WithPrefix(request.Log, strictResolverType)
 
-	var resolvers []*upstreamResolverStatus
-	for _, r := range r.resolversPerClient {
-		resolvers = r
-
-		break
-	}
-
 	// start with first resolver
-	for i := range resolvers {
-		timeout := config.GetConfig().Upstreams.Timeout.ToDuration()
+	for _, resolver := range r.resolvers {
+		logger.Debugf("using %s as resolver", resolver.resolver)
 
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		// start in new go routine and cancel if
-
-		resolver := resolvers[i]
-		ch := make(chan requestResponse, resolverCount)
-
-		go resolver.resolve(request, ch)
-
-		select {
-		case <-ctx.Done():
-			// log debug/info that timeout exceeded, call `continue` to try next upstream
-			logger.WithField("resolver", resolvers[i].resolver).Debug("upstream exceeded timeout, trying next upstream")
+		resp, err := resolver.resolve(ctx, request)
+		if err != nil {
+			// log error and try next upstream
+			logger.WithField("resolver", resolver.resolver).Debug("resolution failed from resolver, cause: ", err)
 
 			continue
-		case result := <-ch:
-			if result.err != nil {
-				// log error & call `continue` to try next upstream
-				logger.Debug("resolution failed from resolver, cause: ", result.err)
-
-				continue
-			}
-
-			logger.WithFields(logrus.Fields{
-				"resolver": *result.resolver,
-				"answer":   util.AnswerToString(result.response.Res.Answer),
-			}).Debug("using response from resolver")
-
-			return result.response, nil
 		}
+
+		logger.WithFields(logrus.Fields{
+			"resolver": *resolver,
+			"answer":   util.AnswerToString(resp.Res.Answer),
+		}).Debug("using response from resolver")
+
+		return resp, nil
 	}
 
 	return nil, errors.New("resolution was not successful, no resolver returned an answer in time")

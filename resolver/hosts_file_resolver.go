@@ -34,7 +34,10 @@ type HostsFileResolver struct {
 	downloader lists.FileDownloader
 }
 
-func NewHostsFileResolver(cfg config.HostsFileConfig, bootstrap *Bootstrap) (*HostsFileResolver, error) {
+func NewHostsFileResolver(ctx context.Context,
+	cfg config.HostsFileConfig,
+	bootstrap *Bootstrap,
+) (*HostsFileResolver, error) {
 	r := HostsFileResolver{
 		configurable: withConfig(&cfg),
 		typed:        withType("hosts_file"),
@@ -42,7 +45,7 @@ func NewHostsFileResolver(cfg config.HostsFileConfig, bootstrap *Bootstrap) (*Ho
 		downloader: lists.NewDownloader(cfg.Loading.Downloads, bootstrap.NewHTTPTransport()),
 	}
 
-	err := cfg.Loading.StartPeriodicRefresh(r.loadSources, func(err error) {
+	err := cfg.Loading.StartPeriodicRefresh(ctx, r.loadSources, func(err error) {
 		r.log().WithError(err).Errorf("could not load hosts files")
 	})
 	if err != nil {
@@ -106,9 +109,9 @@ func (r *HostsFileResolver) handleReverseDNS(request *model.Request) *model.Resp
 	return nil
 }
 
-func (r *HostsFileResolver) Resolve(request *model.Request) (*model.Response, error) {
+func (r *HostsFileResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
 	if !r.IsEnabled() {
-		return r.next.Resolve(request)
+		return r.next.Resolve(ctx, request)
 	}
 
 	reverseResp := r.handleReverseDNS(request)
@@ -123,15 +126,15 @@ func (r *HostsFileResolver) Resolve(request *model.Request) (*model.Response, er
 	if response != nil {
 		r.log().WithFields(logrus.Fields{
 			"answer": util.AnswerToString(response.Answer),
-			"domain": domain,
+			"domain": util.Obfuscate(domain),
 		}).Debugf("returning hosts file entry")
 
 		return &model.Response{Res: response, RType: model.ResponseTypeHOSTSFILE, Reason: "HOSTS FILE"}, nil
 	}
 
-	r.log().WithField("resolver", Name(r.next)).Trace("go to next resolver")
+	r.log().WithField("next_resolver", Name(r.next)).Trace("go to next resolver")
 
-	return r.next.Resolve(request)
+	return r.next.Resolve(ctx, request)
 }
 
 func (r *HostsFileResolver) resolve(req *dns.Msg, question dns.Question, domain string) *dns.Msg {

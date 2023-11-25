@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"context"
+
 	"github.com/0xERR0R/blocky/config"
 	. "github.com/0xERR0R/blocky/helpertest"
 	"github.com/0xERR0R/blocky/log"
@@ -13,10 +15,13 @@ import (
 
 var _ = Describe("FqdnOnlyResolver", func() {
 	var (
-		sut        *FqdnOnlyResolver
-		sutConfig  config.FqdnOnlyConfig
+		sut        *FQDNOnlyResolver
+		sutConfig  config.FQDNOnly
 		m          *mockResolver
 		mockAnswer *dns.Msg
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 	)
 
 	Describe("Type", func() {
@@ -26,11 +31,14 @@ var _ = Describe("FqdnOnlyResolver", func() {
 	})
 
 	BeforeEach(func() {
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
 		mockAnswer = new(dns.Msg)
 	})
 
 	JustBeforeEach(func() {
-		sut = NewFqdnOnlyResolver(sutConfig)
+		sut = NewFQDNOnlyResolver(sutConfig)
 		m = &mockResolver{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: mockAnswer}, nil)
 		sut.Next(m)
@@ -54,10 +62,10 @@ var _ = Describe("FqdnOnlyResolver", func() {
 
 	When("Fqdn only is enabled", func() {
 		BeforeEach(func() {
-			sutConfig = config.FqdnOnlyConfig{Enable: true}
+			sutConfig = config.FQDNOnly{Enable: true}
 		})
 		It("Should delegate to next resolver if request query is fqdn", func() {
-			Expect(sut.Resolve(newRequest("example.com", A))).
+			Expect(sut.Resolve(ctx, newRequest("example.com", A))).
 				Should(
 					SatisfyAll(
 						HaveNoAnswer(),
@@ -69,7 +77,7 @@ var _ = Describe("FqdnOnlyResolver", func() {
 			Expect(m.Calls).Should(HaveLen(1))
 		})
 		It("Should return NXDOMAIN if request query is not fqdn", func() {
-			Expect(sut.Resolve(newRequest("example", AAAA))).
+			Expect(sut.Resolve(ctx, newRequest("example", AAAA))).
 				Should(
 					SatisfyAll(
 						HaveNoAnswer(),
@@ -100,10 +108,10 @@ var _ = Describe("FqdnOnlyResolver", func() {
 
 	When("Fqdn only is disabled", func() {
 		BeforeEach(func() {
-			sutConfig = config.FqdnOnlyConfig{Enable: false}
+			sutConfig = config.FQDNOnly{Enable: false}
 		})
 		It("Should delegate to next resolver if request query is fqdn", func() {
-			Expect(sut.Resolve(newRequest("example.com", A))).
+			Expect(sut.Resolve(ctx, newRequest("example.com", A))).
 				Should(
 					SatisfyAll(
 						HaveNoAnswer(),
@@ -115,7 +123,7 @@ var _ = Describe("FqdnOnlyResolver", func() {
 			Expect(m.Calls).Should(HaveLen(1))
 		})
 		It("Should delegate to next resolver if request query is not fqdn", func() {
-			Expect(sut.Resolve(newRequest("example", AAAA))).
+			Expect(sut.Resolve(ctx, newRequest("example", AAAA))).
 				Should(
 					SatisfyAll(
 						HaveNoAnswer(),

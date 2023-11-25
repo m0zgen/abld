@@ -1,9 +1,11 @@
 package resolver
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"time"
 
-	"github.com/0xERR0R/blocky/cache/expirationcache"
 	"github.com/0xERR0R/blocky/config"
 	. "github.com/0xERR0R/blocky/evt"
 	. "github.com/0xERR0R/blocky/helpertest"
@@ -26,6 +28,8 @@ var _ = Describe("CachingResolver", func() {
 		sutConfig  config.CachingConfig
 		m          *mockResolver
 		mockAnswer *dns.Msg
+		ctx        context.Context
+		cancelFn   context.CancelFunc
 	)
 
 	Describe("Type", func() {
@@ -43,15 +47,29 @@ var _ = Describe("CachingResolver", func() {
 	})
 
 	JustBeforeEach(func() {
-		sut = NewCachingResolver(sutConfig, nil)
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
+		sut = NewCachingResolver(ctx, sutConfig, nil)
 		m = &mockResolver{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: mockAnswer}, nil)
 		sut.Next(m)
 	})
 
 	Describe("IsEnabled", func() {
-		It("is false", func() {
-			Expect(sut.IsEnabled()).Should(BeFalse())
+		It("is true", func() {
+			Expect(sut.IsEnabled()).Should(BeTrue())
+		})
+
+		When("max caching time is negative", func() {
+			BeforeEach(func() {
+				sutConfig = config.CachingConfig{
+					MaxCachingTime: config.Duration(time.Minute * -1),
+				}
+			})
+			It("is false", func() {
+				Expect(sut.IsEnabled()).Should(BeFalse())
+			})
 		})
 	})
 
@@ -79,19 +97,16 @@ var _ = Describe("CachingResolver", func() {
 			It("should prefetch domain if query count > threshold", func() {
 				// prepare resolver, set smaller caching times for testing
 				prefetchThreshold := 5
-				configureCaches(sut, &sutConfig)
-				sut.resultCache = expirationcache.NewCache(
-					expirationcache.WithCleanUpInterval[cacheValue](100*time.Millisecond),
-					expirationcache.WithOnExpiredFn(sut.onExpired))
+				configureCaches(ctx, sut, &sutConfig)
 
-				domainPrefetched := make(chan string, 1)
-				prefetchHitDomain := make(chan string, 1)
+				domainPrefetched := make(chan bool, 1)
+				prefetchHitDomain := make(chan bool, 1)
 				prefetchedCnt := make(chan int, 1)
 				Expect(Bus().SubscribeOnce(CachingPrefetchCacheHit, func(domain string) {
-					prefetchHitDomain <- domain
+					prefetchHitDomain <- true
 				})).Should(Succeed())
 				Expect(Bus().SubscribeOnce(CachingDomainPrefetched, func(domain string) {
-					domainPrefetched <- domain
+					domainPrefetched <- true
 				})).Should(Succeed())
 
 				Expect(Bus().SubscribeOnce(CachingDomainsToPrefetchCountChanged, func(cnt int) {
@@ -99,7 +114,7 @@ var _ = Describe("CachingResolver", func() {
 				})).Should(Succeed())
 
 				// first request
-				_, _ = sut.Resolve(newRequest("example.com.", A))
+				_, _ = sut.Resolve(ctx, newRequest("example.com.", A))
 
 				// Domain is not prefetched
 				Expect(domainPrefetched).ShouldNot(Receive())
@@ -109,30 +124,75 @@ var _ = Describe("CachingResolver", func() {
 
 				// now query again > threshold
 				for i := 0; i < prefetchThreshold+1; i++ {
-					_, err := sut.Resolve(newRequest("example.com.", A))
+					_, err := sut.Resolve(ctx, newRequest("example.com.", A))
 					Expect(err).Should(Succeed())
 				}
 
 				// now is this domain prefetched
-				Eventually(domainPrefetched, "4s").Should(Receive(Equal("example.com")))
+				Eventually(domainPrefetched, "10s").Should(Receive(Equal(true)))
 
 				// and it should hit from prefetch cache
-				Expect(sut.Resolve(newRequest("example.com.", A))).
+				Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 					Should(
 						SatisfyAll(
 							HaveResponseType(ResponseTypeCACHED),
 							HaveReturnCode(dns.RcodeSuccess),
 							BeDNSRecord("example.com.", A, "123.122.121.120"),
 							HaveTTL(BeNumerically("<=", 2))))
-				Eventually(prefetchHitDomain, "4s").Should(Receive(Equal("example.com")))
+				Eventually(prefetchHitDomain, "10s").Should(Receive(Equal(true)))
 			})
-			When("threshold is 0", func() {
-				BeforeEach(func() {
-					sutConfig.PrefetchThreshold = 0
+		})
+		When("caching with default values is enabled", func() {
+			BeforeEach(func() {
+				rr1, err := dns.NewRR(fmt.Sprintf("%s\t%d\tIN\t%s\t%s", "example.com.", 600, A, "1.2.3.4"))
+				Expect(err).Should(Succeed())
+
+				rr2, err := dns.NewRR(fmt.Sprintf("%s\t%d\tIN\t%s\t%s", "example.com.", 950, CNAME, "cname.example.com"))
+				Expect(err).Should(Succeed())
+
+				msg := new(dns.Msg)
+				msg.Answer = []dns.RR{rr1, rr2}
+				mockAnswer = msg
+			})
+			It("should cache response and use response's TTL for multiple records", func() {
+				By("first request", func() {
+					result, err := sut.Resolve(ctx, newRequest("example.com.", A))
+					Expect(err).Should(Succeed())
+					Expect(result).
+						Should(
+							SatisfyAll(
+								HaveResponseType(ResponseTypeRESOLVED),
+								HaveReturnCode(dns.RcodeSuccess),
+								WithTransform(ToAnswer, SatisfyAll(
+									HaveLen(2),
+								)),
+							))
+
+					Expect(result.Res.Answer[0]).Should(HaveTTL(BeNumerically("==", 600)))
+					Expect(result.Res.Answer[1]).Should(HaveTTL(BeNumerically("==", 950)))
+
+					Expect(m.Calls).Should(HaveLen(1))
 				})
 
-				It("should always prefetch", func() {
-					Expect(sut.shouldPrefetch("domain.tld")).Should(BeTrue())
+				By("second request", func() {
+					Eventually(func(g Gomega) {
+						result, err := sut.Resolve(ctx, newRequest("example.com.", A))
+						g.Expect(err).Should(Succeed())
+						g.Expect(result).
+							Should(
+								SatisfyAll(
+									HaveResponseType(ResponseTypeCACHED),
+									HaveReturnCode(dns.RcodeSuccess),
+									WithTransform(ToAnswer, SatisfyAll(
+										HaveLen(2),
+									))))
+
+						g.Expect(result.Res.Answer[0]).Should(HaveTTL(BeNumerically("<=", 599)))
+						g.Expect(result.Res.Answer[1]).Should(HaveTTL(BeNumerically("<=", 949)))
+
+						// still one call to upstream
+						g.Expect(m.Calls).Should(HaveLen(1))
+					}, "1s").Should(Succeed())
 				})
 			})
 		})
@@ -149,16 +209,16 @@ var _ = Describe("CachingResolver", func() {
 
 				It("should cache response and use response's TTL", func() {
 					By("first request", func() {
-						domain := make(chan string, 1)
+						domain := make(chan bool, 1)
 						_ = Bus().SubscribeOnce(CachingResultCacheMiss, func(d string) {
-							domain <- d
+							domain <- true
 						})
 
 						totalCacheCount := make(chan int, 1)
 						_ = Bus().SubscribeOnce(CachingResultCacheChanged, func(d int) {
 							totalCacheCount <- d
 						})
-						Expect(sut.Resolve(newRequest("example.com.", A))).
+						Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -168,18 +228,18 @@ var _ = Describe("CachingResolver", func() {
 
 						Expect(m.Calls).Should(HaveLen(1))
 
-						Expect(domain).Should(Receive(Equal("example.com")))
+						Expect(domain).Should(Receive(Equal(true)))
 						Expect(totalCacheCount).Should(Receive(Equal(1)))
 					})
 
 					By("second request", func() {
 						Eventually(func(g Gomega) {
-							domain := make(chan string, 1)
+							domain := make(chan bool, 1)
 							_ = Bus().SubscribeOnce(CachingResultCacheHit, func(d string) {
-								domain <- d
+								domain <- true
 							})
 
-							g.Expect(sut.Resolve(newRequest("example.com.", A))).
+							g.Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 								Should(
 									SatisfyAll(
 										HaveResponseType(ResponseTypeCACHED),
@@ -191,7 +251,7 @@ var _ = Describe("CachingResolver", func() {
 							// still one call to upstream
 							g.Expect(m.Calls).Should(HaveLen(1))
 
-							g.Expect(domain).Should(Receive(Equal("example.com")))
+							g.Expect(domain).Should(Receive(Equal(true)))
 						}, "1s").Should(Succeed())
 					})
 				})
@@ -204,7 +264,7 @@ var _ = Describe("CachingResolver", func() {
 
 					It("should cache response and use min caching time as TTL", func() {
 						By("first request", func() {
-							Expect(sut.Resolve(newRequest("example.com.", A))).
+							Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 								Should(
 									SatisfyAll(
 										HaveResponseType(ResponseTypeRESOLVED),
@@ -216,7 +276,9 @@ var _ = Describe("CachingResolver", func() {
 						})
 
 						By("second request", func() {
-							Eventually(sut.Resolve).WithArguments(newRequest("example.com.", A)).
+							Eventually(sut.Resolve).
+								WithContext(ctx).
+								WithArguments(newRequest("example.com.", A)).
 								Should(
 									SatisfyAll(
 										HaveResponseType(ResponseTypeCACHED),
@@ -239,7 +301,7 @@ var _ = Describe("CachingResolver", func() {
 
 					It("should cache response and use min caching time as TTL", func() {
 						By("first request", func() {
-							Expect(sut.Resolve(newRequest("example.com.", AAAA))).
+							Expect(sut.Resolve(ctx, newRequest("example.com.", AAAA))).
 								Should(
 									SatisfyAll(
 										HaveResponseType(ResponseTypeRESOLVED),
@@ -250,7 +312,9 @@ var _ = Describe("CachingResolver", func() {
 						})
 
 						By("second request", func() {
-							Eventually(sut.Resolve).WithArguments(newRequest("example.com.", AAAA)).
+							Eventually(sut.Resolve).
+								WithContext(ctx).
+								WithArguments(newRequest("example.com.", AAAA)).
 								Should(
 									SatisfyAll(
 										HaveResponseType(ResponseTypeCACHED),
@@ -284,7 +348,7 @@ var _ = Describe("CachingResolver", func() {
 
 				It("Shouldn't cache any responses", func() {
 					By("first request", func() {
-						Expect(sut.Resolve(newRequest("example.com.", AAAA))).
+						Expect(sut.Resolve(ctx, newRequest("example.com.", AAAA))).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -295,7 +359,9 @@ var _ = Describe("CachingResolver", func() {
 					})
 
 					By("second request", func() {
-						Eventually(sut.Resolve).WithArguments(newRequest("example.com.", AAAA)).
+						Eventually(sut.Resolve).
+							WithContext(ctx).
+							WithArguments(newRequest("example.com.", AAAA)).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -318,7 +384,7 @@ var _ = Describe("CachingResolver", func() {
 				})
 				It("should cache response and use max caching time as TTL if response TTL is bigger", func() {
 					By("first request", func() {
-						Expect(sut.Resolve(newRequest("example.com.", AAAA))).
+						Expect(sut.Resolve(ctx, newRequest("example.com.", AAAA))).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -329,7 +395,9 @@ var _ = Describe("CachingResolver", func() {
 					})
 
 					By("second request", func() {
-						Eventually(sut.Resolve).WithArguments(newRequest("example.com.", AAAA)).
+						Eventually(sut.Resolve).
+							WithContext(ctx).
+							WithArguments(newRequest("example.com.", AAAA)).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeCACHED),
@@ -357,7 +425,7 @@ var _ = Describe("CachingResolver", func() {
 				})
 				It("should cache response and return 0 TTL if entry is expired", func() {
 					By("first request", func() {
-						Expect(sut.Resolve(newRequest("example.com.", A))).
+						Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeRESOLVED),
@@ -370,7 +438,9 @@ var _ = Describe("CachingResolver", func() {
 					})
 
 					By("second request", func() {
-						Eventually(sut.Resolve, "2s").WithArguments(newRequest("example.com.", A)).
+						Eventually(sut.Resolve, "2s").
+							WithContext(ctx).
+							WithArguments(newRequest("example.com.", A)).
 							Should(
 								SatisfyAll(
 									HaveResponseType(ResponseTypeCACHED),
@@ -401,7 +471,7 @@ var _ = Describe("CachingResolver", func() {
 					})
 
 					By("first request", func() {
-						Expect(sut.Resolve(newRequest("example.com.", AAAA))).
+						Expect(sut.Resolve(ctx, newRequest("example.com.", AAAA))).
 							Should(SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
 								HaveReturnCode(dns.RcodeNameError),
@@ -412,7 +482,9 @@ var _ = Describe("CachingResolver", func() {
 					})
 
 					By("second request", func() {
-						Eventually(sut.Resolve).WithArguments(newRequest("example.com.", AAAA)).
+						Eventually(sut.Resolve).
+							WithContext(ctx).
+							WithArguments(newRequest("example.com.", AAAA)).
 							Should(SatisfyAll(
 								HaveResponseType(ResponseTypeCACHED),
 								HaveReason("CACHED NEGATIVE"),
@@ -435,7 +507,7 @@ var _ = Describe("CachingResolver", func() {
 
 				It("response shouldn't be cached", func() {
 					By("first request", func() {
-						Expect(sut.Resolve(newRequest("example.com.", AAAA))).
+						Expect(sut.Resolve(ctx, newRequest("example.com.", AAAA))).
 							Should(SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
 								HaveReturnCode(dns.RcodeNameError),
@@ -446,7 +518,9 @@ var _ = Describe("CachingResolver", func() {
 					})
 
 					By("second request", func() {
-						Eventually(sut.Resolve).WithArguments(newRequest("example.com.", AAAA)).
+						Eventually(sut.Resolve).
+							WithContext(ctx).
+							WithArguments(newRequest("example.com.", AAAA)).
 							Should(SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
 								HaveReason(""),
@@ -469,7 +543,7 @@ var _ = Describe("CachingResolver", func() {
 
 				It("response should be cached", func() {
 					By("first request", func() {
-						Expect(sut.Resolve(newRequest("example.com.", AAAA))).
+						Expect(sut.Resolve(ctx, newRequest("example.com.", AAAA))).
 							Should(SatisfyAll(
 								HaveResponseType(ResponseTypeRESOLVED),
 								HaveReturnCode(dns.RcodeSuccess),
@@ -480,7 +554,9 @@ var _ = Describe("CachingResolver", func() {
 					})
 
 					By("second request", func() {
-						Eventually(sut.Resolve).WithArguments(newRequest("example.com.", AAAA)).
+						Eventually(sut.Resolve).
+							WithContext(ctx).
+							WithArguments(newRequest("example.com.", AAAA)).
 							Should(SatisfyAll(
 								HaveResponseType(ResponseTypeCACHED),
 								HaveReason("CACHED"),
@@ -503,7 +579,7 @@ var _ = Describe("CachingResolver", func() {
 			})
 			It("Should be cached", func() {
 				By("first request", func() {
-					Expect(sut.Resolve(newRequest("google.de.", MX))).
+					Expect(sut.Resolve(ctx, newRequest("google.de.", MX))).
 						Should(SatisfyAll(
 							HaveResponseType(ResponseTypeRESOLVED),
 							HaveReturnCode(dns.RcodeSuccess),
@@ -515,13 +591,135 @@ var _ = Describe("CachingResolver", func() {
 				})
 
 				By("second request", func() {
-					Eventually(sut.Resolve).WithArguments(newRequest("google.de.", MX)).
+					Eventually(sut.Resolve).
+						WithContext(ctx).
+						WithArguments(newRequest("google.de.", MX)).
 						Should(SatisfyAll(
 							HaveResponseType(ResponseTypeCACHED),
 							HaveReason("CACHED"),
 							HaveReturnCode(dns.RcodeSuccess),
 							BeDNSRecord("google.de.", MX, "alt1.aspmx.l.google.com."),
 							HaveTTL(BeNumerically("<=", 179)),
+						))
+
+					// still one call to resolver
+					Expect(m.Calls).Should(HaveLen(1))
+				})
+			})
+		})
+	})
+
+	Describe("Truncated responses should not be cached", func() {
+		When("Some query returns truncated response", func() {
+			BeforeEach(func() {
+				mockAnswer, _ = util.NewMsgWithAnswer("google.de.", 180, A, "1.1.1.1")
+				mockAnswer.Truncated = true
+			})
+			It("Should not be cached", func() {
+				By("first request", func() {
+					Expect(sut.Resolve(ctx, newRequest("google.de.", A))).
+						Should(SatisfyAll(
+							HaveResponseType(ResponseTypeRESOLVED),
+							HaveReturnCode(dns.RcodeSuccess),
+							BeDNSRecord("google.de.", A, "1.1.1.1"),
+							HaveTTL(BeNumerically("==", 180)),
+						))
+
+					Expect(m.Calls).Should(HaveLen(1))
+				})
+
+				By("second request", func() {
+					Expect(sut.Resolve(ctx, newRequest("google.de.", A))).
+						Should(SatisfyAll(
+							HaveResponseType(ResponseTypeRESOLVED),
+							HaveReturnCode(dns.RcodeSuccess),
+							BeDNSRecord("google.de.", A, "1.1.1.1"),
+							HaveTTL(BeNumerically("==", 180)),
+						))
+
+					Expect(m.Calls).Should(HaveLen(2))
+				})
+			})
+		})
+	})
+
+	Describe("Responses with CD flag should not be cached", func() {
+		When("Some query returns response with CD flag", func() {
+			BeforeEach(func() {
+				mockAnswer, _ = util.NewMsgWithAnswer("google.de.", 180, A, "1.1.1.1")
+				mockAnswer.CheckingDisabled = true
+			})
+			It("Should not be cached", func() {
+				By("first request", func() {
+					Expect(sut.Resolve(ctx, newRequest("google.de.", A))).
+						Should(SatisfyAll(
+							HaveResponseType(ResponseTypeRESOLVED),
+							HaveReturnCode(dns.RcodeSuccess),
+							BeDNSRecord("google.de.", A, "1.1.1.1"),
+							HaveTTL(BeNumerically("==", 180)),
+						))
+
+					Expect(m.Calls).Should(HaveLen(1))
+				})
+
+				By("second request", func() {
+					Expect(sut.Resolve(ctx, newRequest("google.de.", A))).
+						Should(SatisfyAll(
+							HaveResponseType(ResponseTypeRESOLVED),
+							HaveReturnCode(dns.RcodeSuccess),
+							BeDNSRecord("google.de.", A, "1.1.1.1"),
+							HaveTTL(BeNumerically("==", 180)),
+						))
+
+					Expect(m.Calls).Should(HaveLen(2))
+				})
+			})
+		})
+	})
+
+	Describe("EDNS pseudo records should not be cached", func() {
+		When("Some query returns EDNS OPT RRs", func() {
+			BeforeEach(func() {
+				mockAnswer, _ = util.NewMsgWithAnswer("google.de.", 180, A, "1.1.1.1")
+				opt := new(dns.OPT)
+				opt.Hdr.Name = "."
+				opt.Hdr.Rrtype = dns.TypeOPT
+				opt.Option = append(opt.Option, &dns.EDNS0_COOKIE{Code: dns.EDNS0COOKIE, Cookie: "someclientcookie"})
+				mockAnswer.Extra = append(mockAnswer.Extra, opt)
+			})
+			It("Should not be cached", func() {
+				By("first request", func() {
+					Expect(sut.Resolve(ctx, newRequest("google.de.", A))).
+						Should(SatisfyAll(
+							HaveResponseType(ResponseTypeRESOLVED),
+							HaveReturnCode(dns.RcodeSuccess),
+							BeDNSRecord("google.de.", A, "1.1.1.1"),
+							HaveTTL(BeNumerically("==", 180)),
+							// original response has one ENDS0 Opt
+							WithTransform(ToExtra,
+								SatisfyAll(
+									HaveLen(1),
+								)),
+						))
+
+					Expect(m.Calls).Should(HaveLen(1))
+				})
+
+				By("second request", func() {
+					Eventually(sut.Resolve).
+						WithContext(ctx).
+						WithArguments(newRequest("google.de.", A)).
+						Should(SatisfyAll(
+							HaveResponseType(ResponseTypeCACHED),
+							HaveReason("CACHED"),
+							HaveReturnCode(dns.RcodeSuccess),
+							BeDNSRecord("google.de.", A, "1.1.1.1"),
+							HaveTTL(BeNumerically("<=", 179)),
+							// cached response is without EDNS RRs
+							WithTransform(ToExtra,
+								SatisfyAll(
+									BeEmpty(),
+								)),
 						))
 
 					// still one call to resolver
@@ -565,14 +763,14 @@ var _ = Describe("CachingResolver", func() {
 				}
 				mockAnswer, _ = util.NewMsgWithAnswer("example.com.", 1000, A, "1.1.1.1")
 
-				sut = NewCachingResolver(sutConfig, redisClient)
+				sut = NewCachingResolver(ctx, sutConfig, redisClient)
 				m = &mockResolver{}
 				m.On("Resolve", mock.Anything).Return(&Response{Res: mockAnswer}, nil)
 				sut.Next(m)
 			})
 
 			It("put in redis", func() {
-				Expect(sut.Resolve(newRequest("example.com.", A))).
+				Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 					Should(HaveResponseType(ResponseTypeRESOLVED))
 
 				Eventually(func() []string {
@@ -594,12 +792,49 @@ var _ = Describe("CachingResolver", func() {
 				}
 				redisClient.CacheChannel <- redisMockMsg
 
-				Eventually(sut.Resolve).WithArguments(request).
+				Eventually(sut.Resolve).
+					WithContext(ctx).
+					WithArguments(request).
 					Should(
 						SatisfyAll(
 							HaveResponseType(ResponseTypeCACHED),
 							HaveTTL(BeNumerically("<=", 10)),
 						))
+			})
+		})
+	})
+	Context("isRequestCacheable", func() {
+		var request *Request
+		When("request is not cacheable", func() {
+			BeforeEach(func() {
+				request = newRequest("example.com.", A)
+				e := new(dns.EDNS0_SUBNET)
+				e.SourceScope = 0
+				e.Address = net.ParseIP("192.168.0.0")
+				e.Family = 1
+				e.SourceNetmask = 24
+				util.SetEdns0Option(request.Req, e)
+			})
+
+			It("should return false", func() {
+				Expect(isRequestCacheable(request)).
+					Should(BeFalse())
+			})
+		})
+		When("request is cacheable", func() {
+			BeforeEach(func() {
+				request = newRequest("example.com.", A)
+				e := new(dns.EDNS0_SUBNET)
+				e.SourceScope = 0
+				e.Address = net.ParseIP("192.168.0.10")
+				e.Family = 1
+				e.SourceNetmask = 32
+				util.SetEdns0Option(request.Req, e)
+			})
+
+			It("should return true", func() {
+				Expect(isRequestCacheable(request)).
+					Should(BeTrue())
 			})
 		})
 	})

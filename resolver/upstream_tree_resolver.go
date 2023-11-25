@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -16,21 +18,21 @@ const (
 )
 
 type UpstreamTreeResolver struct {
-	configurable[*config.UpstreamsConfig]
+	configurable[*config.Upstreams]
 	typed
 
 	branches map[string]Resolver
 }
 
-func NewUpstreamTreeResolver(cfg config.UpstreamsConfig, branches map[string]Resolver) (Resolver, error) {
+func NewUpstreamTreeResolver(ctx context.Context, cfg config.Upstreams, bootstrap *Bootstrap) (Resolver, error) {
 	if len(cfg.Groups[upstreamDefaultCfgName]) == 0 {
 		return nil, fmt.Errorf("no external DNS resolvers configured as default upstream resolvers. "+
 			"Please configure at least one under '%s' configuration name", upstreamDefaultCfgName)
 	}
 
-	if len(branches) != len(cfg.Groups) {
-		return nil, fmt.Errorf("amount of passed in branches (%d) does not match amount of configured upstream groups (%d)",
-			len(branches), len(cfg.Groups))
+	branches, err := createUpstreamBranches(ctx, cfg, bootstrap)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(branches) == 1 {
@@ -50,6 +52,45 @@ func NewUpstreamTreeResolver(cfg config.UpstreamsConfig, branches map[string]Res
 	return &r, nil
 }
 
+func createUpstreamBranches(
+	ctx context.Context, cfg config.Upstreams, bootstrap *Bootstrap,
+) (map[string]Resolver, error) {
+	branches := make(map[string]Resolver, len(cfg.Groups))
+	errs := make([]error, 0, len(cfg.Groups))
+
+	for group, upstreams := range cfg.Groups {
+		var (
+			upstream Resolver
+			err      error
+		)
+
+		groupConfig := config.NewUpstreamGroup(group, cfg, upstreams)
+
+		switch cfg.Strategy {
+		case config.UpstreamStrategyParallelBest:
+			fallthrough
+		case config.UpstreamStrategyRandom:
+			upstream, err = NewParallelBestResolver(ctx, groupConfig, bootstrap)
+		case config.UpstreamStrategyStrict:
+			upstream, err = NewStrictResolver(ctx, groupConfig, bootstrap)
+		}
+
+		if err != nil {
+			errs = append(errs, fmt.Errorf("group %s: %w", group, err))
+
+			continue
+		}
+
+		branches[group] = upstream
+	}
+
+	if len(errs) != 0 {
+		return nil, errors.Join(errs...)
+	}
+
+	return branches, nil
+}
+
 func (r *UpstreamTreeResolver) Name() string {
 	return r.String()
 }
@@ -64,7 +105,7 @@ func (r *UpstreamTreeResolver) String() string {
 	return fmt.Sprintf("%s upstreams %q", upstreamTreeResolverType, strings.Join(result, ", "))
 }
 
-func (r *UpstreamTreeResolver) Resolve(request *model.Request) (*model.Response, error) {
+func (r *UpstreamTreeResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
 	logger := log.WithPrefix(request.Log, upstreamTreeResolverType)
 
 	group := r.upstreamGroupByClient(request)
@@ -72,11 +113,11 @@ func (r *UpstreamTreeResolver) Resolve(request *model.Request) (*model.Response,
 	// delegate request to group resolver
 	logger.WithField("resolver", fmt.Sprintf("%s (%s)", group, r.branches[group].Type())).Debug("delegating to resolver")
 
-	return r.branches[group].Resolve(request)
+	return r.branches[group].Resolve(ctx, request)
 }
 
 func (r *UpstreamTreeResolver) upstreamGroupByClient(request *model.Request) string {
-	groups := []string{}
+	groups := make([]string, 0, len(r.branches))
 	clientIP := request.ClientIP.String()
 
 	// try IP
@@ -104,7 +145,7 @@ func (r *UpstreamTreeResolver) upstreamGroupByClient(request *model.Request) str
 
 	if len(groups) > 0 {
 		if len(groups) > 1 {
-			r.log().WithFields(logrus.Fields{
+			request.Log.WithFields(logrus.Fields{
 				"clientNames": request.ClientNames,
 				"clientIP":    clientIP,
 				"groups":      groups,

@@ -11,6 +11,7 @@ import (
 	"github.com/0xERR0R/blocky/model"
 
 	"github.com/miekg/dns"
+	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
@@ -19,12 +20,27 @@ import (
 const (
 	A     = dns.Type(dns.TypeA)
 	AAAA  = dns.Type(dns.TypeAAAA)
+	CNAME = dns.Type(dns.TypeCNAME)
 	HTTPS = dns.Type(dns.TypeHTTPS)
 	MX    = dns.Type(dns.TypeMX)
 	PTR   = dns.Type(dns.TypePTR)
 	TXT   = dns.Type(dns.TypeTXT)
 	DS    = dns.Type(dns.TypeDS)
 )
+
+// GetIntPort returns an port for the current testing
+// process by adding the current ginkgo parallel process to
+// the base port and returning it as int
+func GetIntPort(port int) int {
+	return port + ginkgo.GinkgoParallelProcess()
+}
+
+// GetStringPort returns an port for the current testing
+// process by adding the current ginkgo parallel process to
+// the base port and returning it as string
+func GetStringPort(port int) string {
+	return fmt.Sprintf("%d", GetIntPort(port))
+}
 
 // TempFile creates temp file with passed data
 func TempFile(data string) *os.File {
@@ -101,6 +117,32 @@ func HaveReturnCode(code int) types.GomegaMatcher {
 	}).WithTemplate(
 		"Expected:\n{{.Actual}}\n{{.To}} have RCode:\n{{format .Data 1}}",
 		fmt.Sprintf("%d (%s)", code, dns.RcodeToString[code]),
+	)
+}
+
+// HaveEdnsOption checks if the given message contains an EDNS0 record with the given option code.
+func HaveEdnsOption(code uint16) types.GomegaMatcher {
+	return gcustom.MakeMatcher(func(actual any) (bool, error) {
+		var opt *dns.OPT
+		switch msg := actual.(type) {
+		case *model.Response:
+			opt = msg.Res.IsEdns0()
+		case *dns.Msg:
+			opt = msg.IsEdns0()
+		}
+
+		if opt != nil {
+			for _, o := range opt.Option {
+				if o.Option() == code {
+					return true, nil
+				}
+			}
+		}
+
+		return false, nil
+	}).WithTemplate(
+		"Expected:\n{{.Actual}}\n{{.To}} have EDNS option:\n{{format .Data 1}}",
+		code,
 	)
 }
 
