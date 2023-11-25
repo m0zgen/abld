@@ -1,1 +1,12 @@
-[{"version": "dev-bld", "title": "dev-bld", "aliases": []}]
+[
+  {
+    "version": "main",
+    "title": "main",
+    "aliases": []
+  },
+  {
+    "version": "dev-bld",
+    "title": "dev-bld",
+    "aliases": []
+  }
+]
