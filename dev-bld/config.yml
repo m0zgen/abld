@@ -19,14 +19,15 @@ upstreams:
     laptop*:
       - 123.123.123.123
   # optional: Determines what strategy blocky uses to choose the upstream servers.
-  # accepted: parallel_best, strict
+  # accepted: parallel_best, strict, random
   # default: parallel_best
   strategy: parallel_best
   # optional: timeout to query the upstream resolver. Default: 2s
   timeout: 2s
-
-# optional: If true, blocky will fail to start unless at least one upstream server per group is reachable. Default: false
-startVerifyUpstream: true
+  # optional: If true, blocky will fail to start unless at least one upstream server per group is reachable. Default: false
+  startVerify: false
+  # optional: HTTP User Agent when connecting to upstreams. Default: none
+  userAgent: "custom UA"
 
 # optional: Determines how blocky will create outgoing connections. This impacts both upstreams, and lists.
 # accepted: dual, v4, v6
@@ -71,8 +72,8 @@ blocking:
       - https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt
       - |
         # inline definition with YAML literal block scalar style
-        # hosts format
         someadsdomain.com
+        *.example.com
     special:
       - https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews/hosts
   # definition of whitelist groups. Attention: if the same group has black and whitelists, whitelists will be used to disable particular blacklist entries. If a group has only whitelist entries -> this means only domains from this list are allowed, all other domains will be blocked
@@ -203,6 +204,8 @@ queryLog:
   fields:
     - clientIP
     - duration
+  # optional: Interval to write data in bulk to the external database, default: 30s
+  flushInterval: 30s
 
 # optional: Blocky can synchronize its cache and blocking state between multiple instances through redis.
 redis:
