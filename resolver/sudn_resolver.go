@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"net"
 	"strings"
 
@@ -9,7 +10,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-type sudnHandler = func(request *model.Request, cfg *config.SUDNConfig) *model.Response
+type sudnHandler = func(request *model.Request, cfg *config.SUDN) *model.Response
 
 //nolint:gochecknoglobals
 var (
@@ -89,17 +90,17 @@ var (
 type SpecialUseDomainNamesResolver struct {
 	NextResolver
 	typed
-	configurable[*config.SUDNConfig]
+	configurable[*config.SUDN]
 }
 
-func NewSpecialUseDomainNamesResolver(cfg config.SUDNConfig) *SpecialUseDomainNamesResolver {
+func NewSpecialUseDomainNamesResolver(cfg config.SUDN) *SpecialUseDomainNamesResolver {
 	return &SpecialUseDomainNamesResolver{
 		typed:        withType("special_use_domains"),
 		configurable: withConfig(&cfg),
 	}
 }
 
-func (r *SpecialUseDomainNamesResolver) Resolve(request *model.Request) (*model.Response, error) {
+func (r *SpecialUseDomainNamesResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
 	handler := r.handler(request)
 	if handler != nil {
 		resp := handler(request, r.cfg)
@@ -108,7 +109,7 @@ func (r *SpecialUseDomainNamesResolver) Resolve(request *model.Request) (*model.
 		}
 	}
 
-	return r.next.Resolve(request)
+	return r.next.Resolve(ctx, request)
 }
 
 func (r *SpecialUseDomainNamesResolver) handler(request *model.Request) sudnHandler {
@@ -134,11 +135,11 @@ func newSUDNResponse(response *model.Request, rcode int) *model.Response {
 	return newResponse(response, rcode, model.ResponseTypeSPECIAL, "Special-Use Domain Name")
 }
 
-func sudnNXDomain(request *model.Request, _ *config.SUDNConfig) *model.Response {
+func sudnNXDomain(request *model.Request, _ *config.SUDN) *model.Response {
 	return newSUDNResponse(request, dns.RcodeNameError)
 }
 
-func sudnLocalhost(request *model.Request, cfg *config.SUDNConfig) *model.Response {
+func sudnLocalhost(request *model.Request, cfg *config.SUDN) *model.Response {
 	q := request.Req.Question[0]
 
 	var rr dns.RR
@@ -165,7 +166,7 @@ func sudnLocalhost(request *model.Request, cfg *config.SUDNConfig) *model.Respon
 	return response
 }
 
-func sudnRFC6762AppendixG(request *model.Request, cfg *config.SUDNConfig) *model.Response {
+func sudnRFC6762AppendixG(request *model.Request, cfg *config.SUDN) *model.Response {
 	if !cfg.RFC6762AppendixG {
 		return nil
 	}
@@ -173,7 +174,7 @@ func sudnRFC6762AppendixG(request *model.Request, cfg *config.SUDNConfig) *model
 	return sudnNXDomain(request, cfg)
 }
 
-func sudnHomeArpa(request *model.Request, cfg *config.SUDNConfig) *model.Response {
+func sudnHomeArpa(request *model.Request, cfg *config.SUDN) *model.Response {
 	if request.Req.Question[0].Qtype == dns.TypeDS {
 		// DS queries must be forwarded
 		return nil

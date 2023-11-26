@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -15,7 +14,7 @@ import (
 	. "github.com/0xERR0R/blocky/evt"
 	"github.com/0xERR0R/blocky/lists/parsers"
 	"github.com/0xERR0R/blocky/log"
-	"github.com/0xERR0R/blocky/util"
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
 	. "github.com/0xERR0R/blocky/helpertest"
@@ -36,10 +35,16 @@ var _ = Describe("ListCache", func() {
 		lists          map[string][]config.BytesSource
 		downloader     FileDownloader
 		mockDownloader *MockDownloader
+		ctx            context.Context
+		cancelFn       context.CancelFunc
+		err            error
+		expectFail     bool
 	)
 
 	BeforeEach(func() {
-		var err error
+		expectFail = false
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
 
 		listCacheType = ListCacheTypeBlacklist
 
@@ -76,16 +81,18 @@ var _ = Describe("ListCache", func() {
 	})
 
 	JustBeforeEach(func() {
-		var err error
-
 		Expect(lists).ShouldNot(BeNil(), "bad test: forgot to set `lists`")
 
 		if mockDownloader != nil {
 			downloader = mockDownloader
 		}
 
-		sut, err = NewListCache(listCacheType, sutConfig, lists, downloader)
-		Expect(err).Should(Succeed())
+		sut, err = NewListCache(ctx, listCacheType, sutConfig, lists, downloader)
+		if expectFail {
+			Expect(err).Should(HaveOccurred())
+		} else {
+			Expect(err).Should(Succeed())
+		}
 	})
 
 	Describe("List cache and matching", func() {
@@ -181,7 +188,7 @@ var _ = Describe("ListCache", func() {
 					Expect(group).Should(ContainElement("gr1"))
 				})
 
-				sut.Refresh()
+				_ = sut.Refresh()
 
 				By("List couldn't be loaded due to timeout", func() {
 					group := sut.Match("blocked1.com", []string{"gr1"})
@@ -296,15 +303,20 @@ var _ = Describe("ListCache", func() {
 			})
 		})
 		When("group with bigger files", func() {
-			It("should match", func() {
-				file1, lines1 := createTestListFile(GinkgoT().TempDir(), 10000)
-				file2, lines2 := createTestListFile(GinkgoT().TempDir(), 15000)
-				file3, lines3 := createTestListFile(GinkgoT().TempDir(), 13000)
-				lists := map[string][]config.BytesSource{
+			var (
+				file1, file2, file3    string
+				lines1, lines2, lines3 int
+			)
+			BeforeEach(func() {
+				file1, lines1 = createTestListFile(GinkgoT().TempDir(), 10000)
+				file2, lines2 = createTestListFile(GinkgoT().TempDir(), 15000)
+				file3, lines3 = createTestListFile(GinkgoT().TempDir(), 13000)
+				lists = map[string][]config.BytesSource{
 					"gr1": config.NewBytesSources(file1, file2, file3),
 				}
-
-				sut, err := NewListCache(ListCacheTypeBlacklist, sutConfig, lists, downloader)
+			})
+			It("should match", func() {
+				sut, err = NewListCache(ctx, ListCacheTypeBlacklist, sutConfig, lists, downloader)
 				Expect(err).Should(Succeed())
 
 				Expect(sut.groupedCache.ElementCount("gr1")).Should(Equal(lines1 + lines2 + lines3))
@@ -351,16 +363,14 @@ var _ = Describe("ListCache", func() {
 			BeforeEach(func() {
 				sutConfig.MaxErrorsPerSource = 0
 				sutConfig.Strategy = config.StartStrategyTypeFailOnError
-			})
-			It("should fail parsing", func() {
-				lists := map[string][]config.BytesSource{
+				lists = map[string][]config.BytesSource{
 					"gr1": {
 						config.TextBytesSource("invaliddomain!"), // too many errors since `maxErrorsPerSource` is 0
 					},
 				}
-
-				_, err := NewListCache(ListCacheTypeBlacklist, sutConfig, lists, downloader)
-				Expect(err).ShouldNot(Succeed())
+				expectFail = true
+			})
+			It("should fail parsing", func() {
 				Expect(err).Should(MatchError(parsers.ErrTooManyErrors))
 			})
 		})
@@ -400,15 +410,15 @@ var _ = Describe("ListCache", func() {
 
 		BeforeEach(func() {
 			logger, hook = log.NewMockEntry()
-		})
 
-		It("should print list configuration", func() {
-			lists := map[string][]config.BytesSource{
+			lists = map[string][]config.BytesSource{
 				"gr1": config.NewBytesSources(server1.URL, server2.URL),
 				"gr2": {config.TextBytesSource("inline", "definition")},
 			}
+		})
 
-			sut, err := NewListCache(ListCacheTypeBlacklist, sutConfig, lists, downloader)
+		It("should print list configuration", func() {
+			sut, err = NewListCache(ctx, ListCacheTypeBlacklist, sutConfig, lists, downloader)
 			Expect(err).Should(Succeed())
 
 			sut.LogConfig(logger)
@@ -423,14 +433,14 @@ var _ = Describe("ListCache", func() {
 		When("async load is enabled", func() {
 			BeforeEach(func() {
 				sutConfig.Strategy = config.StartStrategyTypeFast
+
+				lists = map[string][]config.BytesSource{
+					"gr1": config.NewBytesSources("doesnotexist"),
+				}
 			})
 
 			It("should never return an error", func() {
-				lists := map[string][]config.BytesSource{
-					"gr1": config.NewBytesSources("doesnotexist"),
-				}
-
-				_, err := NewListCache(ListCacheTypeBlacklist, sutConfig, lists, downloader)
+				_, err := NewListCache(ctx, ListCacheTypeBlacklist, sutConfig, lists, downloader)
 				Expect(err).Should(Succeed())
 			})
 		})
@@ -438,11 +448,11 @@ var _ = Describe("ListCache", func() {
 })
 
 type MockDownloader struct {
-	util.MockCallSequence[string]
+	MockCallSequence[string]
 }
 
 func newMockDownloader(driver func(res chan<- string, err chan<- error)) *MockDownloader {
-	return &MockDownloader{util.NewMockCallSequence(driver)}
+	return &MockDownloader{NewMockCallSequence(driver)}
 }
 
 func (m *MockDownloader) DownloadFile(_ string) (io.ReadCloser, error) {
@@ -469,28 +479,9 @@ func createTestListFile(dir string, totalLines int) (string, int) {
 
 	w := bufio.NewWriter(file)
 	for i := 0; i < totalLines; i++ {
-		fmt.Fprintln(w, RandStringBytes(8+rand.Intn(10))+".com")
+		fmt.Fprintln(w, uuid.NewString()+".com")
 	}
 	w.Flush()
 
 	return file.Name(), totalLines
-}
-
-const (
-	initCharpool = "abcdefghijklmnopqrstuvwxyz"
-	contCharpool = initCharpool + "0123456789-"
-)
-
-func RandStringBytes(n int) string {
-	b := make([]byte, n)
-
-	pool := initCharpool
-
-	for i := range b {
-		b[i] = pool[rand.Intn(len(pool))]
-
-		pool = contCharpool
-	}
-
-	return string(b)
 }

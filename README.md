@@ -78,7 +78,7 @@
 
 ## Quick start
 
-You can jump to [Installation](https://0xerr0r.github.io/blocky/installation/) chapter in the documentation.
+You can jump to [Installation](https://0xerr0r.github.io/blocky/latest/installation/) chapter in the documentation.
 
 ## Full documentation
 

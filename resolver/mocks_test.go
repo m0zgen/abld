@@ -23,7 +23,7 @@ type mockResolver struct {
 	mock.Mock
 	NextResolver
 
-	ResolveFn  func(req *model.Request) (*model.Response, error)
+	ResolveFn  func(ctx context.Context, req *model.Request) (*model.Response, error)
 	ResponseFn func(req *dns.Msg) *dns.Msg
 	AnswerFn   func(qType dns.Type, qName string) (*dns.Msg, error)
 }
@@ -45,11 +45,11 @@ func (r *mockResolver) LogConfig(*logrus.Entry) {
 	r.Called()
 }
 
-func (r *mockResolver) Resolve(req *model.Request) (*model.Response, error) {
+func (r *mockResolver) Resolve(ctx context.Context, req *model.Request) (*model.Response, error) {
 	args := r.Called(req)
 
 	if r.ResolveFn != nil {
-		return r.ResolveFn(req)
+		return r.ResolveFn(ctx, req)
 	}
 
 	if r.ResponseFn != nil {
@@ -118,10 +118,10 @@ func autoAnswer(qType dns.Type, qName string) (*dns.Msg, error) {
 }
 
 // newTestBootstrap creates a test Bootstrap
-func newTestBootstrap(response *dns.Msg) *Bootstrap {
+func newTestBootstrap(ctx context.Context, response *dns.Msg) *Bootstrap {
 	bootstrapUpstream := &mockResolver{}
 
-	b, err := NewBootstrap(&config.Config{})
+	b, err := NewBootstrap(ctx, &config.Config{})
 	util.FatalOnError("can't create bootstrap", err)
 
 	b.resolver = bootstrapUpstream

@@ -1,7 +1,6 @@
 bin
 dist
 site
-docs
 node_modules
 .git
 .idea
@@ -12,3 +11,6 @@ node_modules
 LICENSE
 vendor
 e2e/
+.devcontainer/
+coverage.txt
+coverage/

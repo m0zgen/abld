@@ -25,6 +25,8 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 	var (
 		sut       *Bootstrap
 		sutConfig *config.Config
+		ctx       context.Context
+		cancelFn  context.CancelFunc
 
 		err error
 	)
@@ -40,11 +42,15 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 					IPs: []net.IP{net.IPv4zero},
 				},
 			},
+			Upstreams: defaultUpstreamsConfig,
 		}
+
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
 	})
 
 	JustBeforeEach(func() {
-		sut, err = NewBootstrap(sutConfig)
+		sut, err = NewBootstrap(ctx, sutConfig)
 		Expect(err).Should(Succeed())
 	})
 
@@ -66,7 +72,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 					},
 				}
 
-				_, err := sut.resolveUpstream(nil, "example.com")
+				_, err := sut.resolveUpstream(ctx, nil, "example.com")
 				Expect(err).ShouldNot(Succeed())
 				Expect(usedSystemResolver).Should(Receive(BeTrue()))
 			})
@@ -76,7 +82,6 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 					transport := sut.NewHTTPTransport()
 
 					Expect(transport).ShouldNot(BeNil())
-					Expect(*transport).Should(BeZero()) //nolint:govet
 				})
 			})
 
@@ -99,7 +104,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 						},
 					}
 
-					_, err := NewBootstrap(&cfg)
+					_, err := NewBootstrap(ctx, &cfg)
 					Expect(err).ShouldNot(Succeed())
 				})
 			})
@@ -141,7 +146,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 						},
 					}
 
-					_, err := NewBootstrap(&cfg)
+					_, err := NewBootstrap(ctx, &cfg)
 					Expect(err).ShouldNot(Succeed())
 					Expect(err.Error()).Should(ContainSubstring("must use IP instead of hostname"))
 				})
@@ -185,7 +190,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 						},
 					}
 
-					_, err := NewBootstrap(&cfg)
+					_, err := NewBootstrap(ctx, &cfg)
 					Expect(err).ShouldNot(Succeed())
 					Expect(err.Error()).Should(ContainSubstring("no IPs configured"))
 				})
@@ -204,7 +209,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 						},
 					}
 
-					_, err := NewBootstrap(&cfg)
+					_, err := NewBootstrap(ctx, &cfg)
 					Expect(err).Should(Succeed())
 				})
 			})
@@ -239,7 +244,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 		When("called from bootstrap.upstream", func() {
 			It("uses hardcoded IPs", func() {
-				ips, err := sut.resolveUpstream(bootstrapUpstream, "host")
+				ips, err := sut.resolveUpstream(ctx, bootstrapUpstream, "host")
 
 				Expect(err).Should(Succeed())
 				Expect(ips).Should(Equal(sutConfig.BootstrapDNS[0].IPs))
@@ -248,7 +253,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 		When("hostname is an IP", func() {
 			It("returns immediately", func() {
-				ips, err := sut.resolve("0.0.0.0", config.IPVersionDual.QTypes())
+				ips, err := sut.resolve(ctx, "0.0.0.0", config.IPVersionDual.QTypes())
 
 				Expect(err).Should(Succeed())
 				Expect(ips).Should(ContainElement(net.IPv4zero))
@@ -264,7 +269,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				bootstrapUpstream.On("Resolve", mock.Anything).Return(&model.Response{Res: bootstrapResponse}, nil)
 
-				ips, err := sut.resolve("localhost", []dns.Type{AAAA})
+				ips, err := sut.resolve(ctx, "localhost", []dns.Type{AAAA})
 
 				Expect(err).Should(Succeed())
 				Expect(ips).Should(HaveLen(1))
@@ -278,7 +283,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				bootstrapUpstream.On("Resolve", mock.Anything).Return(nil, resolveErr)
 
-				ips, err := sut.resolve("localhost", []dns.Type{A})
+				ips, err := sut.resolve(ctx, "localhost", []dns.Type{A})
 
 				Expect(err).ShouldNot(Succeed())
 				Expect(err.Error()).Should(ContainSubstring(resolveErr.Error()))
@@ -292,7 +297,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				bootstrapUpstream.On("Resolve", mock.Anything).Return(&model.Response{Res: bootstrapResponse}, nil)
 
-				ips, err := sut.resolve("unknownhost.invalid", []dns.Type{A})
+				ips, err := sut.resolve(ctx, "unknownhost.invalid", []dns.Type{A})
 
 				Expect(err).ShouldNot(Succeed())
 				Expect(err.Error()).Should(ContainSubstring("no such host"))
@@ -322,9 +327,9 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				upstream.Host = "localhost" // force bootstrap to do resolve, and not just return the IP as is
 
-				r := newUpstreamResolverUnchecked(upstream, sut)
+				r := newUpstreamResolverUnchecked(newUpstreamConfig(upstream, sutConfig.Upstreams), sut)
 
-				rsp, err := r.Resolve(mainReq)
+				rsp, err := r.Resolve(ctx, mainReq)
 				Expect(err).Should(Succeed())
 				Expect(mockUpstreamServer.GetCallCount()).Should(Equal(1))
 				Expect(rsp.Res.Question[0].Name).Should(Equal("example.com."))
@@ -368,7 +373,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				// implicit expectation of 0 bootstrapUpstream.Resolve calls
 
-				_, err = t.DialContext(context.Background(), "ip", "!bad-addr!")
+				_, err = t.DialContext(ctx, "ip", "!bad-addr!")
 				Expect(err).ShouldNot(Succeed())
 			})
 
@@ -379,7 +384,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				t := sut.NewHTTPTransport()
 
-				_, err = t.DialContext(context.Background(), "ip", "abc:123")
+				_, err = t.DialContext(ctx, "ip", "abc:123")
 
 				Expect(err).ShouldNot(Succeed())
 				Expect(err.Error()).Should(ContainSubstring(resolveErr.Error()))
@@ -392,7 +397,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				t := sut.NewHTTPTransport()
 
-				_, err = t.DialContext(context.Background(), "ip", "abc:123")
+				_, err = t.DialContext(ctx, "ip", "abc:123")
 
 				Expect(err).ShouldNot(Succeed())
 				Expect(err.Error()).Should(ContainSubstring("no such host"))
@@ -432,7 +437,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 		Describe("resolve", func() {
 			AfterEach(func() {
-				_, err := sut.resolveUpstream(nil, "example.com")
+				_, err := sut.resolveUpstream(ctx, nil, "example.com")
 				Expect(err).Should(Succeed())
 
 				m.AssertExpectations(GinkgoT())
@@ -496,7 +501,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			AfterEach(func() {
 				t := sut.NewHTTPTransport()
 
-				conn, err := t.DialContext(context.Background(), dialIPVersion.Net(), "localhost:0")
+				conn, err := t.DialContext(ctx, dialIPVersion.Net(), "localhost:0")
 				Expect(err).Should(Succeed())
 				Expect(conn).Should(Equal(aMockConn))
 
@@ -578,7 +583,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 		})
 
 		It("uses both", func() {
-			_, err := sut.resolve("example.com.", []dns.Type{dns.Type(dns.TypeA)})
+			_, err := sut.resolve(ctx, "example.com.", []dns.Type{dns.Type(dns.TypeA)})
 
 			Expect(err).To(Succeed())
 

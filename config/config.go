@@ -3,6 +3,7 @@ package config
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -10,14 +11,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 
-	. "github.com/0xERR0R/blocky/config/migration" //nolint:revive,stylecheck
+	. "github.com/0xERR0R/blocky/config/migration"
 	"github.com/0xERR0R/blocky/log"
+	"github.com/0xERR0R/blocky/util"
 	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v2"
 )
@@ -78,6 +79,26 @@ func (ipv IPVersion) QTypes() []dns.Type {
 	panic(fmt.Errorf("bad value: %s", ipv))
 }
 
+// TLSVersion represents a TLS protocol version. ENUM(
+// 1.0 = 769
+// 1.1
+// 1.2
+// 1.3
+// )
+type TLSVersion int // values MUST match `tls.VersionTLS*`
+
+func (v *TLSVersion) validate(logger *logrus.Entry) {
+	// So we get a linting error if it is considered insecure in the future
+	minAllowed := tls.Config{MinVersion: tls.VersionTLS12}.MinVersion
+
+	if *v < TLSVersion(minAllowed) {
+		def := mustDefault[Config]().MinTLSServeVer
+
+		logger.Warnf("TLS version %s is insecure, using %s instead", v, def)
+		*v = def
+	}
+}
+
 // QueryLogType type of the query log ENUM(
 // console // use logger as fallback
 // none // no logging
@@ -124,7 +145,7 @@ func (s *StartStrategyType) do(setup func() error, logErr func(error)) error {
 type QueryLogField string
 
 // UpstreamStrategy data field to be logged
-// ENUM(parallel_best,strict)
+// ENUM(parallel_best,strict,random)
 type UpstreamStrategy uint8
 
 //nolint:gochecknoglobals
@@ -189,43 +210,44 @@ func (b *BootstrappedUpstreamConfig) UnmarshalYAML(unmarshal func(interface{}) e
 //
 //nolint:maligned
 type Config struct {
-	Upstreams           UpstreamsConfig           `yaml:"upstreams"`
-	ConnectIPVersion    IPVersion                 `yaml:"connectIPVersion"`
-	CustomDNS           CustomDNSConfig           `yaml:"customDNS"`
-	Conditional         ConditionalUpstreamConfig `yaml:"conditional"`
-	Blocking            BlockingConfig            `yaml:"blocking"`
-	ClientLookup        ClientLookupConfig        `yaml:"clientLookup"`
-	Caching             CachingConfig             `yaml:"caching"`
-	QueryLog            QueryLogConfig            `yaml:"queryLog"`
-	Prometheus          MetricsConfig             `yaml:"prometheus"`
-	Redis               RedisConfig               `yaml:"redis"`
-	Log                 log.Config                `yaml:"log"`
-	Ports               PortsConfig               `yaml:"ports"`
-	DoHUserAgent        string                    `yaml:"dohUserAgent"`
-	MinTLSServeVer      string                    `yaml:"minTlsServeVersion" default:"1.2"`
-	StartVerifyUpstream bool                      `yaml:"startVerifyUpstream" default:"false"`
-	CertFile            string                    `yaml:"certFile"`
-	KeyFile             string                    `yaml:"keyFile"`
-	BootstrapDNS        BootstrapDNSConfig        `yaml:"bootstrapDns"`
-	HostsFile           HostsFileConfig           `yaml:"hostsFile"`
-	FqdnOnly            FqdnOnlyConfig            `yaml:"fqdnOnly"`
-	Filtering           FilteringConfig           `yaml:"filtering"`
-	Ede                 EdeConfig                 `yaml:"ede"`
-	SUDN                SUDNConfig                `yaml:"specialUseDomains"`
+	Upstreams        Upstreams           `yaml:"upstreams"`
+	ConnectIPVersion IPVersion           `yaml:"connectIPVersion"`
+	CustomDNS        CustomDNS           `yaml:"customDNS"`
+	Conditional      ConditionalUpstream `yaml:"conditional"`
+	Blocking         Blocking            `yaml:"blocking"`
+	ClientLookup     ClientLookup        `yaml:"clientLookup"`
+	Caching          CachingConfig       `yaml:"caching"`
+	QueryLog         QueryLogConfig      `yaml:"queryLog"`
+	Prometheus       MetricsConfig       `yaml:"prometheus"`
+	Redis            RedisConfig         `yaml:"redis"`
+	Log              log.Config          `yaml:"log"`
+	Ports            PortsConfig         `yaml:"ports"`
+	MinTLSServeVer   TLSVersion          `yaml:"minTlsServeVersion" default:"1.2"`
+	CertFile         string              `yaml:"certFile"`
+	KeyFile          string              `yaml:"keyFile"`
+	BootstrapDNS     BootstrapDNSConfig  `yaml:"bootstrapDns"`
+	HostsFile        HostsFileConfig     `yaml:"hostsFile"`
+	FQDNOnly         FQDNOnly            `yaml:"fqdnOnly"`
+	Filtering        FilteringConfig     `yaml:"filtering"`
+	EDE              EDE                 `yaml:"ede"`
+	ECS              ECS                 `yaml:"ecs"`
+	SUDN             SUDN                `yaml:"specialUseDomains"`
 
 	// Deprecated options
 	Deprecated struct {
-		Upstream        *UpstreamGroups `yaml:"upstream"`
-		UpstreamTimeout *Duration       `yaml:"upstreamTimeout"`
-		DisableIPv6     *bool           `yaml:"disableIPv6"`
-		LogLevel        *log.Level      `yaml:"logLevel"`
-		LogFormat       *log.FormatType `yaml:"logFormat"`
-		LogPrivacy      *bool           `yaml:"logPrivacy"`
-		LogTimestamp    *bool           `yaml:"logTimestamp"`
-		DNSPorts        *ListenConfig   `yaml:"port"`
-		HTTPPorts       *ListenConfig   `yaml:"httpPort"`
-		HTTPSPorts      *ListenConfig   `yaml:"httpsPort"`
-		TLSPorts        *ListenConfig   `yaml:"tlsPort"`
+		Upstream            *UpstreamGroups `yaml:"upstream"`
+		UpstreamTimeout     *Duration       `yaml:"upstreamTimeout"`
+		DisableIPv6         *bool           `yaml:"disableIPv6"`
+		LogLevel            *log.Level      `yaml:"logLevel"`
+		LogFormat           *log.FormatType `yaml:"logFormat"`
+		LogPrivacy          *bool           `yaml:"logPrivacy"`
+		LogTimestamp        *bool           `yaml:"logTimestamp"`
+		DNSPorts            *ListenConfig   `yaml:"port"`
+		HTTPPorts           *ListenConfig   `yaml:"httpPort"`
+		HTTPSPorts          *ListenConfig   `yaml:"httpsPort"`
+		TLSPorts            *ListenConfig   `yaml:"tlsPort"`
+		StartVerifyUpstream *bool           `yaml:"startVerifyUpstream"`
+		DoHUserAgent        *string         `yaml:"dohUserAgent"`
 	} `yaml:",inline"`
 }
 
@@ -273,8 +295,8 @@ type RedisConfig struct {
 }
 
 type (
-	FqdnOnlyConfig = toEnable
-	EdeConfig      = toEnable
+	FQDNOnly = toEnable
+	EDE      = toEnable
 )
 
 type toEnable struct {
@@ -314,7 +336,10 @@ func (c *SourceLoadingConfig) LogConfig(logger *logrus.Entry) {
 	log.WithIndent(logger, "  ", c.Downloads.LogConfig)
 }
 
-func (c *SourceLoadingConfig) StartPeriodicRefresh(refresh func(context.Context) error, logErr func(error)) error {
+func (c *SourceLoadingConfig) StartPeriodicRefresh(ctx context.Context,
+	refresh func(context.Context) error,
+	logErr func(error),
+) error {
 	refreshAndRecover := func(ctx context.Context) (rerr error) {
 		defer func() {
 			if val := recover(); val != nil {
@@ -331,20 +356,29 @@ func (c *SourceLoadingConfig) StartPeriodicRefresh(refresh func(context.Context)
 	}
 
 	if c.RefreshPeriod > 0 {
-		go c.periodically(refreshAndRecover, logErr)
+		go c.periodically(ctx, refreshAndRecover, logErr)
 	}
 
 	return nil
 }
 
-func (c *SourceLoadingConfig) periodically(refresh func(context.Context) error, logErr func(error)) {
+func (c *SourceLoadingConfig) periodically(ctx context.Context,
+	refresh func(context.Context) error,
+	logErr func(error),
+) {
 	ticker := time.NewTicker(c.RefreshPeriod.ToDuration())
 	defer ticker.Stop()
 
-	for range ticker.C {
-		err := refresh(context.Background())
-		if err != nil {
-			logErr(err)
+	for {
+		select {
+		case <-ticker.C:
+			err := refresh(ctx)
+			if err != nil {
+				logErr(err)
+			}
+
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -371,30 +405,34 @@ func WithDefaults[T any]() (T, error) {
 	return cfg, nil
 }
 
-//nolint:gochecknoglobals
-var (
-	config  = &Config{}
-	cfgLock sync.RWMutex
-)
+func mustDefault[T any]() T {
+	cfg, err := WithDefaults[T]()
+	if err != nil {
+		util.FatalOnError("broken defaults", err)
+	}
+
+	return cfg
+}
 
 // LoadConfig creates new config from YAML file or a directory containing YAML files
-func LoadConfig(path string, mandatory bool) (*Config, error) {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-
+func LoadConfig(path string, mandatory bool) (rCfg *Config, rerr error) {
 	cfg, err := WithDefaults[Config]()
 	if err != nil {
 		return nil, err
 	}
+
+	defer func() {
+		if rerr == nil {
+			util.LogPrivacy.Store(rCfg.Log.Privacy)
+		}
+	}()
 
 	fs, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !mandatory {
 			// config file does not exist
 			// return config with default values
-			config = &cfg
-
-			return config, nil
+			return &cfg, nil
 		}
 
 		return nil, fmt.Errorf("can't read config file(s): %w", err)
@@ -419,8 +457,6 @@ func LoadConfig(path string, mandatory bool) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	config = &cfg
 
 	return &cfg, nil
 }
@@ -489,6 +525,8 @@ func unmarshalConfig(data []byte, cfg *Config) error {
 		logger.Error("configuration uses deprecated options, see warning logs for details")
 	}
 
+	cfg.validate(logger)
+
 	return nil
 }
 
@@ -501,14 +539,16 @@ func (cfg *Config) migrate(logger *logrus.Entry) bool {
 				cfg.Filtering.QueryTypes.Insert(dns.Type(dns.TypeAAAA))
 			}
 		}),
-		"port":         Move(To("ports.dns", &cfg.Ports)),
-		"httpPort":     Move(To("ports.http", &cfg.Ports)),
-		"httpsPort":    Move(To("ports.https", &cfg.Ports)),
-		"tlsPort":      Move(To("ports.tls", &cfg.Ports)),
-		"logLevel":     Move(To("log.level", &cfg.Log)),
-		"logFormat":    Move(To("log.format", &cfg.Log)),
-		"logPrivacy":   Move(To("log.privacy", &cfg.Log)),
-		"logTimestamp": Move(To("log.timestamp", &cfg.Log)),
+		"port":                Move(To("ports.dns", &cfg.Ports)),
+		"httpPort":            Move(To("ports.http", &cfg.Ports)),
+		"httpsPort":           Move(To("ports.https", &cfg.Ports)),
+		"tlsPort":             Move(To("ports.tls", &cfg.Ports)),
+		"logLevel":            Move(To("log.level", &cfg.Log)),
+		"logFormat":           Move(To("log.format", &cfg.Log)),
+		"logPrivacy":          Move(To("log.privacy", &cfg.Log)),
+		"logTimestamp":        Move(To("log.timestamp", &cfg.Log)),
+		"startVerifyUpstream": Move(To("upstreams.startVerify", &cfg.Upstreams)),
+		"dohUserAgent":        Move(To("upstreams.userAgent", &cfg.Upstreams)),
 	})
 
 	usesDepredOpts = cfg.Blocking.migrate(logger) || usesDepredOpts
@@ -517,12 +557,8 @@ func (cfg *Config) migrate(logger *logrus.Entry) bool {
 	return usesDepredOpts
 }
 
-// GetConfig returns the current config
-func GetConfig() *Config {
-	cfgLock.RLock()
-	defer cfgLock.RUnlock()
-
-	return config
+func (cfg *Config) validate(logger *logrus.Entry) {
+	cfg.MinTLSServeVer.validate(logger)
 }
 
 // ConvertPort converts string representation into a valid port (0 - 65535)

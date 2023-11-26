@@ -1,11 +1,15 @@
+// Description: Tests for ede_resolver.go
 package resolver
 
 import (
+	"context"
 	"errors"
+	"math"
 
 	"github.com/0xERR0R/blocky/config"
 	. "github.com/0xERR0R/blocky/helpertest"
 	"github.com/0xERR0R/blocky/log"
+	"github.com/0xERR0R/blocky/util"
 
 	. "github.com/0xERR0R/blocky/model"
 
@@ -17,10 +21,13 @@ import (
 
 var _ = Describe("EdeResolver", func() {
 	var (
-		sut        *EdeResolver
-		sutConfig  config.EdeConfig
+		sut        *EDEResolver
+		sutConfig  config.EDE
 		m          *mockResolver
 		mockAnswer *dns.Msg
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 	)
 
 	Describe("Type", func() {
@@ -30,6 +37,9 @@ var _ = Describe("EdeResolver", func() {
 	})
 
 	BeforeEach(func() {
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
 		mockAnswer = new(dns.Msg)
 	})
 
@@ -43,24 +53,24 @@ var _ = Describe("EdeResolver", func() {
 			}, nil)
 		}
 
-		sut = NewEdeResolver(sutConfig)
+		sut = NewEDEResolver(sutConfig)
 		sut.Next(m)
 	})
 
 	When("ede is disabled", func() {
 		BeforeEach(func() {
-			sutConfig = config.EdeConfig{
+			sutConfig = config.EDE{
 				Enable: false,
 			}
 		})
 		It("shouldn't add EDE information", func() {
-			Expect(sut.Resolve(newRequest("example.com.", A))).
+			Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 				Should(
 					SatisfyAll(
 						HaveNoAnswer(),
 						HaveResponseType(ResponseTypeCUSTOMDNS),
 						HaveReturnCode(dns.RcodeSuccess),
-						WithTransform(ToExtra, BeEmpty()),
+						Not(HaveEdnsOption(dns.EDNS0EDE)),
 					))
 
 			// delegated to next resolver
@@ -76,33 +86,53 @@ var _ = Describe("EdeResolver", func() {
 
 	When("ede is enabled", func() {
 		BeforeEach(func() {
-			sutConfig = config.EdeConfig{
+			sutConfig = config.EDE{
 				Enable: true,
 			}
 		})
 
-		extractFirstOptRecord := func(e []dns.RR) []dns.EDNS0 {
-			return e[0].(*dns.OPT).Option
+		extractEdeOption := func(res *Response) dns.EDNS0_EDE {
+			return *util.GetEdns0Option[*dns.EDNS0_EDE](res.Res)
 		}
 
 		It("should add EDE information", func() {
-			Expect(sut.Resolve(newRequest("example.com.", A))).
+			Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 				Should(
 					SatisfyAll(
 						HaveNoAnswer(),
 						HaveResponseType(ResponseTypeCUSTOMDNS),
 						HaveReturnCode(dns.RcodeSuccess),
-						// extra should contain one OPT record
-						WithTransform(ToExtra,
+						HaveEdnsOption(dns.EDNS0EDE),
+						WithTransform(extractEdeOption,
 							SatisfyAll(
-								HaveLen(1),
-								WithTransform(extractFirstOptRecord,
-									SatisfyAll(
-										ContainElement(HaveField("InfoCode", Equal(dns.ExtendedErrorCodeForgedAnswer))),
-										ContainElement(HaveField("ExtraText", Equal("Test"))),
-									)),
+								HaveField("InfoCode", Equal(dns.ExtendedErrorCodeForgedAnswer)),
+								HaveField("ExtraText", Equal("Test")),
 							)),
 					))
+		})
+
+		When("resolver returns other", func() {
+			BeforeEach(func() {
+				m = &mockResolver{}
+				m.On("Resolve", mock.Anything).Return(&Response{
+					Res:    mockAnswer,
+					RType:  ResponseType(math.MaxInt),
+					Reason: "Test",
+				}, nil)
+			})
+
+			It("shouldn't add EDE information", func() {
+				Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
+					Should(
+						SatisfyAll(
+							HaveNoAnswer(),
+							HaveReturnCode(dns.RcodeSuccess),
+							Not(HaveEdnsOption(dns.EDNS0EDE)),
+						))
+
+				// delegated to next resolver
+				Expect(m.Calls).Should(HaveLen(1))
+			})
 		})
 
 		When("resolver returns an error", func() {
@@ -114,7 +144,7 @@ var _ = Describe("EdeResolver", func() {
 			})
 
 			It("should return it", func() {
-				resp, err := sut.Resolve(newRequest("example.com", A))
+				resp, err := sut.Resolve(ctx, newRequest("example.com", A))
 				Expect(resp).To(BeNil())
 				Expect(err).To(Equal(resolveErr))
 			})

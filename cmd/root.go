@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -54,13 +55,14 @@ Complete documentation is available at https://github.com/0xERR0R/blocky`,
 		newServeCommand(),
 		newBlockingCommand(),
 		NewListsCommand(),
-		NewHealthcheckCommand())
+		NewHealthcheckCommand(),
+		newCacheCommand())
 
 	return c
 }
 
-func apiURL(path string) string {
-	return fmt.Sprintf("http://%s%s", net.JoinHostPort(apiHost, strconv.Itoa(int(apiPort))), path)
+func apiURL() string {
+	return fmt.Sprintf("http://%s%s", net.JoinHostPort(apiHost, strconv.Itoa(int(apiPort))), "/api")
 }
 
 //nolint:gochecknoinits
@@ -86,7 +88,7 @@ func initConfig() {
 		util.FatalOnError("unable to load configuration: ", err)
 	}
 
-	log.ConfigureLogger(&cfg.Log)
+	log.Configure(&cfg.Log)
 
 	if len(cfg.Ports.HTTP) != 0 {
 		split := strings.Split(cfg.Ports.HTTP[0], ":")
@@ -111,4 +113,19 @@ func Execute() {
 	if err := NewRootCommand().Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+type codeWithStatus interface {
+	StatusCode() int
+	Status() string
+}
+
+func printOkOrError(resp codeWithStatus, body string) error {
+	if resp.StatusCode() == http.StatusOK {
+		log.Log().Info("OK")
+	} else {
+		return fmt.Errorf("response NOK, %s %s", resp.Status(), body)
+	}
+
+	return nil
 }

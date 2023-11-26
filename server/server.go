@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -19,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/0xERR0R/blocky/api"
 	"github.com/0xERR0R/blocky/config"
 	"github.com/0xERR0R/blocky/log"
 	"github.com/0xERR0R/blocky/metrics"
@@ -45,7 +45,7 @@ type Server struct {
 	dnsServers     []*dns.Server
 	httpListeners  []net.Listener
 	httpsListeners []net.Listener
-	queryResolver  resolver.Resolver
+	queryResolver  resolver.ChainedResolver
 	cfg            *config.Config
 	httpMux        *chi.Mux
 	httpsMux       *chi.Mux
@@ -54,20 +54,6 @@ type Server struct {
 
 func logger() *logrus.Entry {
 	return log.PrefixedLog("server")
-}
-
-func minTLSVersion() uint16 {
-	minTLSVer := config.GetConfig().MinTLSServeVer
-	switch minTLSVer {
-	case "1.2":
-		return tls.VersionTLS12
-	case "1.3":
-		return tls.VersionTLS13
-	default:
-		logger().Warn("Not allowed or supported mininum TLS version ", minTLSVer, ", fallback to TLS 1.3")
-
-		return tls.VersionTLS13
-	}
 }
 
 func tlsCipherSuites() []uint16 {
@@ -114,9 +100,7 @@ func retrieveCertificate(cfg *config.Config) (cert tls.Certificate, err error) {
 // NewServer creates new server instance with passed config
 //
 //nolint:funlen
-func NewServer(cfg *config.Config) (server *Server, err error) {
-	log.ConfigureLogger(&cfg.Log)
-
+func NewServer(ctx context.Context, cfg *config.Config) (server *Server, err error) {
 	var cert tls.Certificate
 
 	if len(cfg.Ports.HTTPS) > 0 || len(cfg.Ports.TLS) > 0 {
@@ -131,7 +115,7 @@ func NewServer(cfg *config.Config) (server *Server, err error) {
 		return nil, fmt.Errorf("server creation failed: %w", err)
 	}
 
-	httpRouter := createRouter(cfg)
+	httpRouter := createHTTPRouter(cfg)
 	httpsRouter := createHTTPSRouter(cfg)
 
 	httpListeners, httpsListeners, err := createHTTPListeners(cfg)
@@ -146,7 +130,7 @@ func NewServer(cfg *config.Config) (server *Server, err error) {
 
 	metrics.RegisterEventListeners()
 
-	bootstrap, err := resolver.NewBootstrap(cfg)
+	bootstrap, err := resolver.NewBootstrap(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +140,7 @@ func NewServer(cfg *config.Config) (server *Server, err error) {
 		return nil, redisErr
 	}
 
-	queryResolver, queryError := createQueryResolver(cfg, bootstrap, redisClient)
+	queryResolver, queryError := createQueryResolver(ctx, cfg, bootstrap, redisClient)
 	if queryError != nil {
 		return nil, queryError
 	}
@@ -175,11 +159,17 @@ func NewServer(cfg *config.Config) (server *Server, err error) {
 	server.printConfiguration()
 
 	server.registerDNSHandlers()
-	server.registerAPIEndpoints(httpRouter)
-	server.registerAPIEndpoints(httpsRouter)
+	err = server.registerAPIEndpoints(httpRouter)
 
-	registerResolverAPIEndpoints(httpRouter, queryResolver)
-	registerResolverAPIEndpoints(httpsRouter, queryResolver)
+	if err != nil {
+		return nil, err
+	}
+
+	err = server.registerAPIEndpoints(httpsRouter)
+
+	if err != nil {
+		return nil, err
+	}
 
 	return server, err
 }
@@ -206,7 +196,7 @@ func createServers(cfg *config.Config, cert tls.Certificate) ([]*dns.Server, err
 		addServers(createUDPServer, cfg.Ports.DNS),
 		addServers(createTCPServer, cfg.Ports.DNS),
 		addServers(func(address string) (*dns.Server, error) {
-			return createTLSServer(address, cert)
+			return createTLSServer(cfg, address, cert)
 		}, cfg.Ports.TLS))
 
 	return dnsServers, err.ErrorOrNil()
@@ -241,26 +231,14 @@ func newListeners(proto string, addresses config.ListenConfig) ([]net.Listener, 
 	return listeners, nil
 }
 
-func registerResolverAPIEndpoints(router chi.Router, res resolver.Resolver) {
-	for res != nil {
-		api.RegisterEndpoint(router, res)
-
-		if cr, ok := res.(resolver.ChainedResolver); ok {
-			res = cr.GetNext()
-		} else {
-			return
-		}
-	}
-}
-
-func createTLSServer(address string, cert tls.Certificate) (*dns.Server, error) {
+func createTLSServer(cfg *config.Config, address string, cert tls.Certificate) (*dns.Server, error) {
 	return &dns.Server{
 		Addr: address,
 		Net:  "tcp-tls",
 		//nolint:gosec
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			MinVersion:   minTLSVersion(),
+			MinVersion:   uint16(cfg.MinTLSServeVer),
 			CipherSuites: tlsCipherSuites(),
 		},
 		Handler: dns.NewServeMux(),
@@ -392,23 +370,18 @@ func createSelfSignedCert() (tls.Certificate, error) {
 }
 
 func createQueryResolver(
+	ctx context.Context,
 	cfg *config.Config,
 	bootstrap *resolver.Bootstrap,
 	redisClient *redis.Client,
-) (r resolver.Resolver, err error) {
-	upstreamBranches, uErr := createUpstreamBranches(cfg, bootstrap)
-	if uErr != nil {
-		return nil, fmt.Errorf("creation of upstream branches failed: %w", uErr)
-	}
+) (resolver.ChainedResolver, error) {
+	upstreamTree, utErr := resolver.NewUpstreamTreeResolver(ctx, cfg.Upstreams, bootstrap)
+	blocking, blErr := resolver.NewBlockingResolver(ctx, cfg.Blocking, redisClient, bootstrap)
+	clientNames, cnErr := resolver.NewClientNamesResolver(ctx, cfg.ClientLookup, cfg.Upstreams, bootstrap)
+	condUpstream, cuErr := resolver.NewConditionalUpstreamResolver(ctx, cfg.Conditional, cfg.Upstreams, bootstrap)
+	hostsFile, hfErr := resolver.NewHostsFileResolver(ctx, cfg.HostsFile, bootstrap)
 
-	upstreamTree, utErr := resolver.NewUpstreamTreeResolver(cfg.Upstreams, upstreamBranches)
-
-	blocking, blErr := resolver.NewBlockingResolver(cfg.Blocking, redisClient, bootstrap)
-	clientNames, cnErr := resolver.NewClientNamesResolver(cfg.ClientLookup, bootstrap, cfg.StartVerifyUpstream)
-	condUpstream, cuErr := resolver.NewConditionalUpstreamResolver(cfg.Conditional, bootstrap, cfg.StartVerifyUpstream)
-	hostsFile, hfErr := resolver.NewHostsFileResolver(cfg.HostsFile, bootstrap)
-
-	err = multierror.Append(
+	err := multierror.Append(
 		multierror.Prefix(utErr, "upstream tree resolver: "),
 		multierror.Prefix(blErr, "blocking resolver: "),
 		multierror.Prefix(cnErr, "client names resolver: "),
@@ -419,53 +392,24 @@ func createQueryResolver(
 		return nil, err
 	}
 
-	r = resolver.Chain(
+	r := resolver.Chain(
 		resolver.NewFilteringResolver(cfg.Filtering),
-		resolver.NewFqdnOnlyResolver(cfg.FqdnOnly),
+		resolver.NewFQDNOnlyResolver(cfg.FQDNOnly),
+		resolver.NewECSResolver(cfg.ECS),
 		clientNames,
-		resolver.NewEdeResolver(cfg.Ede),
-		resolver.NewQueryLoggingResolver(cfg.QueryLog),
+		resolver.NewEDEResolver(cfg.EDE),
+		resolver.NewQueryLoggingResolver(ctx, cfg.QueryLog),
 		resolver.NewMetricsResolver(cfg.Prometheus),
 		resolver.NewRewriterResolver(cfg.CustomDNS.RewriterConfig, resolver.NewCustomDNSResolver(cfg.CustomDNS)),
 		hostsFile,
 		blocking,
-		resolver.NewCachingResolver(cfg.Caching, redisClient),
+		resolver.NewCachingResolver(ctx, cfg.Caching, redisClient),
 		resolver.NewRewriterResolver(cfg.Conditional.RewriterConfig, condUpstream),
 		resolver.NewSpecialUseDomainNamesResolver(cfg.SUDN),
 		upstreamTree,
 	)
 
 	return r, nil
-}
-
-func createUpstreamBranches(
-	cfg *config.Config,
-	bootstrap *resolver.Bootstrap,
-) (map[string]resolver.Resolver, error) {
-	upstreamBranches := make(map[string]resolver.Resolver, len(cfg.Upstreams.Groups))
-
-	var uErr error
-
-	for group, upstreams := range cfg.Upstreams.Groups {
-		var (
-			upstream resolver.Resolver
-			err      error
-		)
-
-		resolverCfg := config.UpstreamsConfig{Groups: config.UpstreamGroups{group: upstreams}}
-
-		switch cfg.Upstreams.Strategy {
-		case config.UpstreamStrategyStrict:
-			upstream, err = resolver.NewStrictResolver(resolverCfg, bootstrap, cfg.StartVerifyUpstream)
-		case config.UpstreamStrategyParallelBest:
-			upstream, err = resolver.NewParallelBestResolver(resolverCfg, bootstrap, cfg.StartVerifyUpstream)
-		}
-
-		upstreamBranches[group] = upstream
-		uErr = multierror.Append(multierror.Prefix(err, fmt.Sprintf("group %s: ", group))).ErrorOrNil()
-	}
-
-	return upstreamBranches, uErr
 }
 
 func (s *Server) registerDNSHandlers() {
@@ -501,10 +445,9 @@ func (s *Server) printConfiguration() {
 	runtime.ReadMemStats(&m)
 
 	logger().Infof("  memory:")
-	logger().Infof("    alloc =        %10v MB", toMB(m.Alloc))
-	logger().Infof("    heapAlloc =    %10v MB", toMB(m.HeapAlloc))
-	logger().Infof("    sys =          %10v MB", toMB(m.Sys))
-	logger().Infof("    numGC =        %10v", m.NumGC)
+	logger().Infof("    heap =     %10v MB", toMB(m.HeapAlloc))
+	logger().Infof("    sys =      %10v MB", toMB(m.Sys))
+	logger().Infof("    numGC =    %10v", m.NumGC)
 }
 
 func toMB(b uint64) uint64 {
@@ -520,7 +463,7 @@ const (
 )
 
 // Start starts the server
-func (s *Server) Start(errCh chan<- error) {
+func (s *Server) Start(ctx context.Context, errCh chan<- error) {
 	logger().Info("Starting server")
 
 	for _, srv := range s.dnsServers {
@@ -567,7 +510,7 @@ func (s *Server) Start(errCh chan<- error) {
 				WriteTimeout:      writeTimeout,
 				//nolint:gosec
 				TLSConfig: &tls.Config{
-					MinVersion:   minTLSVersion(),
+					MinVersion:   uint16(s.cfg.MinTLSServeVer),
 					CipherSuites: tlsCipherSuites(),
 					Certificates: []tls.Certificate{s.cert},
 				},
@@ -579,7 +522,7 @@ func (s *Server) Start(errCh chan<- error) {
 		}()
 	}
 
-	registerPrintConfigurationTrigger(s)
+	registerPrintConfigurationTrigger(ctx, s)
 }
 
 // Stop stops the server
@@ -645,7 +588,7 @@ func (s *Server) OnRequest(w dns.ResponseWriter, request *dns.Msg) {
 
 	r := createResolverRequest(w, request)
 
-	response, err := s.queryResolver.Resolve(r)
+	response, err := s.queryResolver.Resolve(context.Background(), r)
 
 	if err != nil {
 		logger().Error("error on processing request:", err)

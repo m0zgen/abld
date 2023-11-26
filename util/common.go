@@ -3,24 +3,35 @@ package util
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 
-	"github.com/0xERR0R/blocky/config"
 	"github.com/0xERR0R/blocky/log"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 )
 
-var alphanumeric = regexp.MustCompile("[a-zA-Z0-9]")
+//nolint:gochecknoglobals
+var (
+	// To avoid making this package depend on config, we use a global
+	// that is set at config load.
+	// Ideally we'd move the obfuscate code somewhere else (maybe into `log`),
+	// but that would require also moving all its dependencies.
+	// This is good enough for now.
+	LogPrivacy atomic.Bool
+
+	alphanumeric = regexp.MustCompile("[a-zA-Z0-9]")
+)
 
 // Obfuscate replaces all alphanumeric characters with * to obfuscate user sensitive data if LogPrivacy is enabled
 func Obfuscate(in string) string {
-	if config.GetConfig().Log.Privacy {
+	if LogPrivacy.Load() {
 		return alphanumeric.ReplaceAllString(in, "*")
 	}
 
@@ -159,7 +170,14 @@ func LogOnErrorWithEntry(logEntry *logrus.Entry, message string, err error) {
 // FatalOnError logs the message only if error is not nil and exits the program execution
 func FatalOnError(message string, err error) {
 	if err != nil {
-		log.Log().Fatal(message, err)
+		logger := log.Log()
+
+		// Make sure the error is printend even if the log has been silenced
+		if logger.Out == io.Discard {
+			log.ConfigureLogger(logger, log.DefaultConfig())
+		}
+
+		logger.Fatal(message, err)
 	}
 }
 

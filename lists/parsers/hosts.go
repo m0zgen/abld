@@ -57,6 +57,7 @@ func (h *HostsIterator) UnmarshalText(data []byte) error {
 	entries := []hostsIterator{
 		new(HostListEntry),
 		new(HostsFileEntry),
+		new(WildcardEntry),
 	}
 
 	for _, entry := range entries {
@@ -200,16 +201,50 @@ func (e HostsFileEntry) forEachHost(callback func(string) error) error {
 	return nil
 }
 
+// WildcardEntry is single domain wildcard.
+type WildcardEntry string
+
+func (e WildcardEntry) String() string {
+	return string(e)
+}
+
+// We assume this is used with `Lines`:
+// - data will never be empty
+// - comments are stripped
+func (e *WildcardEntry) UnmarshalText(data []byte) error {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Split(bufio.ScanWords)
+
+	_ = scanner.Scan() // data is not empty
+
+	entry := scanner.Text()
+
+	if !strings.HasPrefix(entry, "*.") || strings.Count(entry, "*") > 1 {
+		return fmt.Errorf("unsupported wildcard '%s': must start with '*.' and contain no other '*'", entry)
+	}
+
+	*e = WildcardEntry(entry)
+
+	return nil
+}
+
+func (e WildcardEntry) forEachHost(callback func(string) error) error {
+	return callback(e.String())
+}
+
 func normalizeHostsListEntry(host string) (string, error) {
+	var err error
 	// Lookup is the profile preferred for DNS queries, we use Punycode here as it does less validation.
 	// That avoids rejecting domains in a list for reasons that amount to "that domain should not be used"
 	// since the goal of the list is to determine whether the domain should be used or not, we leave
 	// that decision to it.
 	idnaProfile := idna.Punycode
 
-	host, err := idnaProfile.ToASCII(host)
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, host)
+	if !isRegex(host) {
+		host, err = idnaProfile.ToASCII(host)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s", err, host)
+		}
 	}
 
 	if err := validateHostsListEntry(host); err != nil {
@@ -231,12 +266,16 @@ func validateDomainName(host string) error {
 	return fmt.Errorf("invalid domain name: %s", host)
 }
 
+func isRegex(host string) bool {
+	return strings.HasPrefix(host, "/") && strings.HasSuffix(host, "/")
+}
+
 func validateHostsListEntry(host string) error {
 	if net.ParseIP(host) != nil {
 		return nil
 	}
 
-	if strings.HasPrefix(host, "/") && strings.HasSuffix(host, "/") {
+	if isRegex(host) {
 		_, err := regexp.Compile(host)
 
 		return err

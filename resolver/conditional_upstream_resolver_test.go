@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"context"
+
 	"github.com/0xERR0R/blocky/config"
 	. "github.com/0xERR0R/blocky/helpertest"
 	"github.com/0xERR0R/blocky/log"
@@ -15,8 +17,13 @@ import (
 
 var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), func() {
 	var (
-		sut *ConditionalUpstreamResolver
-		m   *mockResolver
+		sut       *ConditionalUpstreamResolver
+		sutConfig config.ConditionalUpstream
+
+		m *mockResolver
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 	)
 
 	Describe("Type", func() {
@@ -26,6 +33,9 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 	})
 
 	BeforeEach(func() {
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+
 		fbTestUpstream := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
 			response, _ = util.NewMsgWithAnswer(request.Question[0].Name, 123, A, "123.124.122.122")
 
@@ -47,15 +57,30 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 		})
 		DeferCleanup(dotTestUpstream.Close)
 
-		sut, _ = NewConditionalUpstreamResolver(config.ConditionalUpstreamConfig{
+		refuseTestUpstream := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
+			response = new(dns.Msg)
+			response.Rcode = dns.RcodeRefused
+			// question section in response should be empty
+			request.Question = make([]dns.Question, 0)
+
+			return response
+		})
+		DeferCleanup(refuseTestUpstream.Close)
+
+		sutConfig = config.ConditionalUpstream{
 			Mapping: config.ConditionalUpstreamMapping{
 				Upstreams: map[string][]config.Upstream{
-					"fritz.box": {fbTestUpstream.Start()},
-					"other.box": {otherTestUpstream.Start()},
-					".":         {dotTestUpstream.Start()},
+					"fritz.box":      {fbTestUpstream.Start()},
+					"other.box":      {otherTestUpstream.Start()},
+					"refused.domain": {refuseTestUpstream.Start()},
+					".":              {dotTestUpstream.Start()},
 				},
 			},
-		}, nil, false)
+		}
+	})
+
+	JustBeforeEach(func() {
+		sut, _ = NewConditionalUpstreamResolver(ctx, sutConfig, defaultUpstreamsConfig, systemResolverBootstrap)
 		m = &mockResolver{}
 		m.On("Resolve", mock.Anything).Return(&Response{Res: new(dns.Msg)}, nil)
 		sut.Next(m)
@@ -78,10 +103,25 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 	})
 
 	Describe("Resolve conditional DNS queries via defined DNS server", func() {
+		When("conditional resolver returns error code", func() {
+			It("Should be returned without changes", func() {
+				Expect(sut.Resolve(ctx, newRequest("refused.domain.", A))).
+					Should(
+						SatisfyAll(
+							HaveNoAnswer(),
+							HaveResponseType(ResponseTypeCONDITIONAL),
+							HaveReason("CONDITIONAL"),
+							HaveReturnCode(dns.RcodeRefused),
+						))
+
+				// no call to next resolver
+				Expect(m.Calls).Should(BeEmpty())
+			})
+		})
 		When("Query is exact equal defined condition in mapping", func() {
 			Context("first mapping entry", func() {
 				It("Should resolve the IP of conditional DNS", func() {
-					Expect(sut.Resolve(newRequest("fritz.box.", A))).
+					Expect(sut.Resolve(ctx, newRequest("fritz.box.", A))).
 						Should(
 							SatisfyAll(
 								BeDNSRecord("fritz.box.", A, "123.124.122.122"),
@@ -97,7 +137,7 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 			})
 			Context("last mapping entry", func() {
 				It("Should resolve the IP of conditional DNS", func() {
-					Expect(sut.Resolve(newRequest("other.box.", A))).
+					Expect(sut.Resolve(ctx, newRequest("other.box.", A))).
 						Should(
 							SatisfyAll(
 								BeDNSRecord("other.box.", A, "192.192.192.192"),
@@ -113,7 +153,7 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 		})
 		When("Query is a subdomain of defined condition in mapping", func() {
 			It("Should resolve the IP of subdomain", func() {
-				Expect(sut.Resolve(newRequest("test.fritz.box.", A))).
+				Expect(sut.Resolve(ctx, newRequest("test.fritz.box.", A))).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("test.fritz.box.", A, "123.124.122.122"),
@@ -128,7 +168,7 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 		})
 		When("Query is not fqdn and . condition is defined in mapping", func() {
 			It("Should resolve the IP of .", func() {
-				Expect(sut.Resolve(newRequest("test.", A))).
+				Expect(sut.Resolve(ctx, newRequest("test.", A))).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("test.", A, "168.168.168.168"),
@@ -145,7 +185,7 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 	Describe("Delegation to next resolver", func() {
 		When("Query doesn't match defined mapping", func() {
 			It("should delegate to next resolver", func() {
-				Expect(sut.Resolve(newRequest("google.com.", A))).
+				Expect(sut.Resolve(ctx, newRequest("google.com.", A))).
 					Should(
 						SatisfyAll(
 							HaveResponseType(ResponseTypeRESOLVED),
@@ -158,16 +198,21 @@ var _ = Describe("ConditionalUpstreamResolver", Label("conditionalResolver"), fu
 
 	When("upstream is invalid", func() {
 		It("errors during construction", func() {
-			b := newTestBootstrap(&dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeServerFailure}})
+			b := newTestBootstrap(ctx, &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeServerFailure}})
 
-			r, err := NewConditionalUpstreamResolver(config.ConditionalUpstreamConfig{
+			upstreamsCfg := config.Upstreams{
+				StartVerify: true,
+			}
+
+			sutConfig := config.ConditionalUpstream{
 				Mapping: config.ConditionalUpstreamMapping{
 					Upstreams: map[string][]config.Upstream{
 						".": {config.Upstream{Host: "example.com"}},
 					},
 				},
-			}, b, true)
+			}
 
+			r, err := NewConditionalUpstreamResolver(ctx, sutConfig, upstreamsCfg, b)
 			Expect(err).ShouldNot(Succeed())
 			Expect(r).Should(BeNil())
 		})

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/0xERR0R/blocky/helpertest"
+	"github.com/avast/retry-go/v4"
 
 	"github.com/0xERR0R/blocky/log"
 	. "github.com/onsi/ginkgo/v2"
@@ -13,8 +14,11 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
-func TestLists(t *testing.T) {
+func init() {
 	log.Silence()
+}
+
+func TestLists(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "e2e Suite", Label("e2e"))
 }
@@ -38,7 +42,13 @@ var _ = BeforeSuite(func() {
 	Expect(err).Should(Succeed())
 
 	DeferCleanup(func() {
-		err := network.Remove(context.Background())
+		err := retry.Do(
+			func() error {
+				return network.Remove(context.Background())
+			},
+			retry.Attempts(3),
+			retry.DelayType(retry.BackOffDelay),
+			retry.Delay(time.Second))
 		Expect(err).Should(Succeed())
 	})
 

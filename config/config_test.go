@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"sync/atomic"
@@ -19,6 +20,8 @@ import (
 
 var _ = Describe("Config", func() {
 	var (
+		c *Config
+
 		tmpDir *helpertest.TmpFolder
 		err    error
 	)
@@ -32,9 +35,9 @@ var _ = Describe("Config", func() {
 	})
 
 	Describe("Deprecated parameters are converted", func() {
-		var c Config
 		BeforeEach(func() {
-			err := defaults.Set(&c)
+			c = new(Config)
+			err := defaults.Set(c)
 			Expect(err).Should(Succeed())
 		})
 
@@ -149,10 +152,10 @@ var _ = Describe("Config", func() {
 				confFile := writeConfigYml(tmpDir)
 				Expect(confFile.Error).Should(Succeed())
 
-				_, err = LoadConfig(confFile.Path, true)
+				c, err = LoadConfig(confFile.Path, true)
 				Expect(err).Should(Succeed())
 
-				defaultTestFileConfig()
+				defaultTestFileConfig(c)
 			})
 		})
 		When("Test file does not exist", func() {
@@ -169,7 +172,7 @@ var _ = Describe("Config", func() {
 				_, err := LoadConfig(tmpDir.Path, true)
 				Expect(err).Should(Succeed())
 
-				defaultTestFileConfig()
+				defaultTestFileConfig(c)
 			})
 
 			It("should ignore non YAML files", func() {
@@ -204,7 +207,7 @@ var _ = Describe("Config", func() {
 				cfgFile := tmpDir.CreateStringFile("config.yml", "malformed_config")
 				Expect(cfgFile.Error).Should(Succeed())
 
-				_, err = LoadConfig(cfgFile.Path, true)
+				c, err = LoadConfig(cfgFile.Path, true)
 				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring("wrong file structure"))
 			})
@@ -323,16 +326,16 @@ bootstrapDns:
 
 		When("config directory does not exist", func() {
 			It("should return error", func() {
-				_, err = LoadConfig(tmpDir.JoinPath("config.yml"), true)
+				c, err = LoadConfig(tmpDir.JoinPath("config.yml"), true)
 				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring("no such file or directory"))
 			})
 
 			It("should use default config if config is not mandatory", func() {
-				_, err = LoadConfig(tmpDir.JoinPath("config.yml"), false)
+				c, err = LoadConfig(tmpDir.JoinPath("config.yml"), false)
 
 				Expect(err).Should(Succeed())
-				Expect(config.Log.Level).Should(Equal(log.LevelInfo))
+				Expect(c.Log.Level).Should(Equal(log.LevelInfo))
 			})
 		})
 	})
@@ -688,6 +691,14 @@ bootstrapDns:
 	})
 
 	Describe("SourceLoadingConfig", func() {
+		var (
+			ctx      context.Context
+			cancelFn context.CancelFunc
+		)
+		BeforeEach(func() {
+			ctx, cancelFn = context.WithCancel(context.Background())
+			DeferCleanup(cancelFn)
+		})
 		It("handles panics", func() {
 			sut := SourceLoadingConfig{
 				Strategy: StartStrategyTypeFailOnError,
@@ -695,7 +706,7 @@ bootstrapDns:
 
 			panicMsg := "panic value"
 
-			err := sut.StartPeriodicRefresh(func(context.Context) error {
+			err := sut.StartPeriodicRefresh(ctx, func(context.Context) error {
 				panic(panicMsg)
 			}, func(err error) {
 				Expect(err).Should(MatchError(ContainSubstring(panicMsg)))
@@ -711,11 +722,11 @@ bootstrapDns:
 			}
 
 			panicMsg := "panic value"
-			calls := make(chan int32)
+			calls := make(chan int32, 3)
 
 			var call atomic.Int32
 
-			err := sut.StartPeriodicRefresh(func(context.Context) error {
+			err := sut.StartPeriodicRefresh(ctx, func(context.Context) error {
 				call := call.Add(1)
 				calls <- call
 
@@ -760,8 +771,10 @@ bootstrapDns:
 	})
 })
 
-func defaultTestFileConfig() {
+func defaultTestFileConfig(config *Config) {
 	Expect(config.Ports.DNS).Should(Equal(ListenConfig{"55553", ":55554", "[::1]:55555"}))
+	Expect(config.Upstreams.StartVerify).Should(BeFalse())
+	Expect(config.Upstreams.UserAgent).Should(Equal("testBlocky"))
 	Expect(config.Upstreams.Groups["default"]).Should(HaveLen(3))
 	Expect(config.Upstreams.Groups["default"][0].Host).Should(Equal("8.8.8.8"))
 	Expect(config.Upstreams.Groups["default"][1].Host).Should(Equal("8.8.4.4"))
@@ -783,21 +796,20 @@ func defaultTestFileConfig() {
 	Expect(config.Blocking.BlockTTL).Should(Equal(Duration(time.Minute)))
 	Expect(config.Blocking.Loading.RefreshPeriod).Should(Equal(Duration(2 * time.Hour)))
 	Expect(config.Filtering.QueryTypes).Should(HaveLen(2))
-	Expect(config.FqdnOnly.Enable).Should(BeTrue())
+	Expect(config.FQDNOnly.Enable).Should(BeTrue())
 
 	Expect(config.Caching.MaxCachingTime).Should(BeZero())
 	Expect(config.Caching.MinCachingTime).Should(BeZero())
 
-	Expect(config.DoHUserAgent).Should(Equal("testBlocky"))
-	Expect(config.MinTLSServeVer).Should(Equal("1.3"))
-	Expect(config.StartVerifyUpstream).Should(BeFalse())
-
-	Expect(GetConfig()).Should(Not(BeNil()))
+	Expect(config.MinTLSServeVer).Should(Equal(TLSVersion13))
+	Expect(config.MinTLSServeVer).Should(BeEquivalentTo(tls.VersionTLS13))
 }
 
 func writeConfigYml(tmpDir *helpertest.TmpFolder) *helpertest.TmpFile {
 	return tmpDir.CreateStringFile("config.yml",
 		"upstreams:",
+		"  startVerify: false",
+		"  userAgent: testBlocky",
 		"  groups:",
 		"    default:",
 		"      - tcp+udp:8.8.8.8",
@@ -850,14 +862,15 @@ func writeConfigYml(tmpDir *helpertest.TmpFolder) *helpertest.TmpFile {
 		"  target: /opt/log",
 		"port: 55553,:55554,[::1]:55555",
 		"logLevel: debug",
-		"dohUserAgent: testBlocky",
 		"minTlsServeVersion: 1.3",
-		"startVerifyUpstream: false")
+	)
 }
 
 func writeConfigDir(tmpDir *helpertest.TmpFolder) error {
 	f1 := tmpDir.CreateStringFile("config1.yaml",
 		"upstreams:",
+		"  startVerify: false",
+		"  userAgent: testBlocky",
 		"  groups:",
 		"    default:",
 		"      - tcp+udp:8.8.8.8",
@@ -874,7 +887,8 @@ func writeConfigDir(tmpDir *helpertest.TmpFolder) error {
 		"filtering:",
 		"  queryTypes:",
 		"    - AAAA",
-		"    - A")
+		"    - A",
+	)
 	if f1.Error != nil {
 		return f1.Error
 	}
@@ -915,9 +929,8 @@ func writeConfigDir(tmpDir *helpertest.TmpFolder) error {
 		"  target: /opt/log",
 		"port: 55553,:55554,[::1]:55555",
 		"logLevel: debug",
-		"dohUserAgent: testBlocky",
 		"minTlsServeVersion: 1.3",
-		"startVerifyUpstream: false")
+	)
 
 	return f2.Error
 }

@@ -1,6 +1,7 @@
 package expirationcache
 
 import (
+	"context"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -8,14 +9,22 @@ import (
 )
 
 var _ = Describe("Expiration cache", func() {
+	var (
+		ctx      context.Context
+		cancelFn context.CancelFunc
+	)
+	BeforeEach(func() {
+		ctx, cancelFn = context.WithCancel(context.Background())
+		DeferCleanup(cancelFn)
+	})
 	Describe("Basic operations", func() {
 		When("string cache was created", func() {
 			It("Initial cache should be empty", func() {
-				cache := NewCache[string]()
+				cache := NewCache[string](ctx, Options{})
 				Expect(cache.TotalCount()).Should(Equal(0))
 			})
 			It("Initial cache should not contain any elements", func() {
-				cache := NewCache[string]()
+				cache := NewCache[string](ctx, Options{})
 				val, expiration := cache.Get("key1")
 				Expect(val).Should(BeNil())
 				Expect(expiration).Should(Equal(time.Duration(0)))
@@ -23,7 +32,7 @@ var _ = Describe("Expiration cache", func() {
 		})
 		When("Put new value with positive TTL", func() {
 			It("Should return the value before element expires", func() {
-				cache := NewCache(WithCleanUpInterval[string](100 * time.Millisecond))
+				cache := NewCache[string](ctx, Options{CleanupInterval: 100 * time.Millisecond})
 				v := "v1"
 				cache.Put("key1", &v, 50*time.Millisecond)
 				val, expiration := cache.Get("key1")
@@ -33,7 +42,7 @@ var _ = Describe("Expiration cache", func() {
 				Expect(cache.TotalCount()).Should(Equal(1))
 			})
 			It("Should return nil after expiration", func() {
-				cache := NewCache(WithCleanUpInterval[string](100 * time.Millisecond))
+				cache := NewCache[string](ctx, Options{CleanupInterval: 100 * time.Millisecond})
 				v := "v1"
 				cache.Put("key1", &v, 50*time.Millisecond)
 
@@ -47,12 +56,12 @@ var _ = Describe("Expiration cache", func() {
 				// wait for cleanup run
 				Eventually(func() int {
 					return cache.lru.Len()
-				}, "100ms").Should(Equal(0))
+				}).Should(Equal(0))
 			})
 		})
 		When("Put new value without expiration", func() {
 			It("Should not cache the value", func() {
-				cache := NewCache(WithCleanUpInterval[string](50 * time.Millisecond))
+				cache := NewCache[string](ctx, Options{CleanupInterval: 50 * time.Millisecond})
 				v := "x"
 				cache.Put("key1", &v, 0)
 				val, expiration := cache.Get("key1")
@@ -63,7 +72,7 @@ var _ = Describe("Expiration cache", func() {
 		})
 		When("Put updated value", func() {
 			It("Should return updated value", func() {
-				cache := NewCache[string]()
+				cache := NewCache[string](ctx, Options{})
 				v1 := "v1"
 				v2 := "v2"
 				cache.Put("key1", &v1, 50*time.Millisecond)
@@ -79,7 +88,7 @@ var _ = Describe("Expiration cache", func() {
 		})
 		When("Purging after usage", func() {
 			It("Should be empty after purge", func() {
-				cache := NewCache[string]()
+				cache := NewCache[string](ctx, Options{})
 				v1 := "y"
 				cache.Put("key1", &v1, time.Second)
 
@@ -91,15 +100,62 @@ var _ = Describe("Expiration cache", func() {
 			})
 		})
 	})
+	Describe("Hook functions", func() {
+		When("Hook functions are defined", func() {
+			It("should call each hook function", func() {
+				onCacheHitChannel := make(chan string, 10)
+				onCacheMissChannel := make(chan string, 10)
+				onAfterPutChannel := make(chan int, 10)
+				cache := NewCache[string](ctx, Options{
+					OnCacheHitFn: func(key string) {
+						onCacheHitChannel <- key
+					},
+					OnCacheMissFn: func(key string) {
+						onCacheMissChannel <- key
+					},
+					OnAfterPutFn: func(newSize int) {
+						onAfterPutChannel <- newSize
+					},
+				})
+
+				By("Get non existing value", func() {
+					val, _ := cache.Get("notExists")
+					Expect(val).Should(BeNil())
+
+					Expect(onCacheMissChannel).Should(Receive(Equal("notExists")))
+					Expect(onCacheHitChannel).Should(Not(Receive()))
+					Expect(onAfterPutChannel).Should(Not(Receive()))
+				})
+
+				By("Put new cache entry", func() {
+					v1 := "v1"
+					cache.Put("key1", &v1, time.Second)
+					Expect(onCacheMissChannel).Should(Not(Receive()))
+					Expect(onCacheMissChannel).Should(Not(Receive()))
+					Expect(onAfterPutChannel).Should(Receive(Equal(1)))
+				})
+
+				By("Get existing value", func() {
+					val, _ := cache.Get("key1")
+					Expect(val).Should(HaveValue(Equal("v1")))
+
+					Expect(onCacheMissChannel).Should(Not(Receive()))
+					Expect(onCacheHitChannel).Should(Receive(Equal("key1")))
+					Expect(onAfterPutChannel).Should(Not(Receive()))
+				})
+			})
+		})
+	})
 	Describe("preExpiration function", func() {
-		When(" function is defined", func() {
+		When("function is defined", func() {
 			It("should update the value and TTL if function returns values", func() {
-				fn := func(key string) (val *string, ttl time.Duration) {
+				fn := func(ctx context.Context, key string) (val *string, ttl time.Duration) {
 					v2 := "v2"
 
 					return &v2, time.Second
 				}
-				cache := NewCache(WithOnExpiredFn(fn))
+
+				cache := NewCacheWithOnExpired[string](ctx, Options{}, fn)
 				v1 := "v1"
 				cache.Put("key1", &v1, 50*time.Millisecond)
 
@@ -113,12 +169,12 @@ var _ = Describe("Expiration cache", func() {
 			})
 
 			It("should update the value and TTL if function returns values on cleanup if element is expired", func() {
-				fn := func(key string) (val *string, ttl time.Duration) {
+				fn := func(ctx context.Context, key string) (val *string, ttl time.Duration) {
 					v2 := "val2"
 
 					return &v2, time.Second
 				}
-				cache := NewCache(WithOnExpiredFn(fn))
+				cache := NewCacheWithOnExpired[string](ctx, Options{}, fn)
 				v1 := "somval"
 				cache.Put("key1", &v1, time.Millisecond)
 
@@ -136,10 +192,10 @@ var _ = Describe("Expiration cache", func() {
 			})
 
 			It("should delete the key if function returns nil", func() {
-				fn := func(key string) (val *string, ttl time.Duration) {
+				fn := func(ctx context.Context, key string) (val *string, ttl time.Duration) {
 					return nil, 0
 				}
-				cache := NewCache(WithCleanUpInterval[string](100*time.Millisecond), WithOnExpiredFn(fn))
+				cache := NewCacheWithOnExpired[string](ctx, Options{CleanupInterval: 100 * time.Microsecond}, fn)
 				v1 := "z"
 				cache.Put("key1", &v1, 50*time.Millisecond)
 
@@ -152,7 +208,7 @@ var _ = Describe("Expiration cache", func() {
 	Describe("LRU behaviour", func() {
 		When("Defined max size is reached", func() {
 			It("should remove old elements", func() {
-				cache := NewCache(WithMaxSize[string](3))
+				cache := NewCache[string](ctx, Options{MaxSize: 3})
 
 				v1 := "val1"
 				v2 := "val2"

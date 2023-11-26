@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"net"
 	"strings"
 
@@ -15,7 +16,7 @@ import (
 
 // CustomDNSResolver resolves passed domain name to ip address defined in domain-IP map
 type CustomDNSResolver struct {
-	configurable[*config.CustomDNSConfig]
+	configurable[*config.CustomDNS]
 	NextResolver
 	typed
 
@@ -24,7 +25,7 @@ type CustomDNSResolver struct {
 }
 
 // NewCustomDNSResolver creates new resolver instance
-func NewCustomDNSResolver(cfg config.CustomDNSConfig) *CustomDNSResolver {
+func NewCustomDNSResolver(cfg config.CustomDNS) *CustomDNSResolver {
 	m := make(map[string][]net.IP, len(cfg.Mapping.HostIPs))
 	reverse := make(map[string][]string, len(cfg.Mapping.HostIPs))
 
@@ -123,7 +124,7 @@ func (r *CustomDNSResolver) processRequest(request *model.Request) *model.Respon
 }
 
 // Resolve uses internal mapping to resolve the query
-func (r *CustomDNSResolver) Resolve(request *model.Request) (*model.Response, error) {
+func (r *CustomDNSResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
 	logger := log.WithPrefix(request.Log, "custom_dns_resolver")
 
 	reverseResp := r.handleReverseDNS(request)
@@ -138,7 +139,7 @@ func (r *CustomDNSResolver) Resolve(request *model.Request) (*model.Response, er
 		}
 	}
 
-	logger.WithField("resolver", Name(r.next)).Trace("go to next resolver")
+	logger.WithField("next_resolver", Name(r.next)).Trace("go to next resolver")
 
-	return r.next.Resolve(request)
+	return r.next.Resolve(ctx, request)
 }
