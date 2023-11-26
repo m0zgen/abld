@@ -47,7 +47,7 @@ buildBLD() {
         mkdir $SCRIPT_PATH/builds
     fi
 
-    env GOOS=linux GOARCH=amd64 go build -o $BUILD_PATH
+    env GOOS=linux GOARCH=amd64 go build -ldflags '-w -s' -gcflags '-trimpath'  -o $BUILD_PATH
 }
 
 deployBLD() {
