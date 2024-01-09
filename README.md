@@ -1,4 +1,4 @@
-# Backend Listener Daemon (BLD)
+# Blocky - Backend Listener Daemon (BLD)
 
 * BLD is a DNS proxy and ad-blocker for the local network written in Go with following features.
 * Uses in OpenBLD.net DNS project as backend DNS server.
