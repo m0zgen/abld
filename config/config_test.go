@@ -30,8 +30,6 @@ var _ = Describe("Config", func() {
 
 	BeforeEach(func() {
 		tmpDir = helpertest.NewTmpFolder("config")
-		Expect(tmpDir.Error).Should(Succeed())
-		DeferCleanup(tmpDir.Clean)
 	})
 
 	Describe("Deprecated parameters are converted", func() {
@@ -56,16 +54,16 @@ var _ = Describe("Config", func() {
 				c.Blocking.Deprecated.FailStartOnListError = ptrOf(true)
 			})
 			It("should change loading.strategy blocking to failOnError", func() {
-				c.Blocking.Loading.Strategy = StartStrategyTypeBlocking
+				c.Blocking.Loading.Strategy = InitStrategyBlocking
 				c.migrate(logger)
 				Expect(hook.Messages).Should(ContainElement(ContainSubstring("blocking.loading.strategy")))
-				Expect(c.Blocking.Loading.Strategy).Should(Equal(StartStrategyTypeFailOnError))
+				Expect(c.Blocking.Loading.Strategy).Should(Equal(InitStrategyFailOnError))
 			})
 			It("shouldn't change loading.strategy if set to fast", func() {
-				c.Blocking.Loading.Strategy = StartStrategyTypeFast
+				c.Blocking.Loading.Strategy = InitStrategyFast
 				c.migrate(logger)
 				Expect(hook.Messages).Should(ContainElement(ContainSubstring("blocking.loading.strategy")))
-				Expect(c.Blocking.Loading.Strategy).Should(Equal(StartStrategyTypeFast))
+				Expect(c.Blocking.Loading.Strategy).Should(Equal(InitStrategyFast))
 			})
 		})
 
@@ -144,13 +142,21 @@ var _ = Describe("Config", func() {
 				Expect(c.Ports.TLS).Should(Equal(ports))
 			})
 		})
+
+		When("parameter 'startVerifyUpstream' is set", func() {
+			It("should convert to upstreams.init.strategy", func() {
+				c.Deprecated.StartVerifyUpstream = ptrOf(true)
+				c.migrate(logger)
+				Expect(hook.Messages).Should(ContainElement(ContainSubstring("startVerifyUpstream")))
+				Expect(c.Upstreams.Init.Strategy).Should(Equal(InitStrategyFailOnError))
+			})
+		})
 	})
 
 	Describe("Creation of Config", func() {
 		When("Test config file will be parsed", func() {
 			It("should return a valid config struct", func() {
 				confFile := writeConfigYml(tmpDir)
-				Expect(confFile.Error).Should(Succeed())
 
 				c, err = LoadConfig(confFile.Path, true)
 				Expect(err).Should(Succeed())
@@ -161,24 +167,22 @@ var _ = Describe("Config", func() {
 		When("Test file does not exist", func() {
 			It("should fail", func() {
 				_, err := LoadConfig(tmpDir.JoinPath("config-does-not-exist.yaml"), true)
-				Expect(err).Should(Not(Succeed()))
+				Expect(err).Should(HaveOccurred())
 			})
 		})
 		When("Multiple config files are used", func() {
-			It("should return a valid config struct", func() {
-				err = writeConfigDir(tmpDir)
-				Expect(err).Should(Succeed())
+			BeforeEach(func() {
+				writeConfigDir(tmpDir)
+			})
 
-				_, err := LoadConfig(tmpDir.Path, true)
+			It("should return a valid config struct", func() {
+				c, err := LoadConfig(tmpDir.Path, true)
 				Expect(err).Should(Succeed())
 
 				defaultTestFileConfig(c)
 			})
 
 			It("should ignore non YAML files", func() {
-				err = writeConfigDir(tmpDir)
-				Expect(err).Should(Succeed())
-
 				tmpDir.CreateStringFile("ignore-me.txt", "THIS SHOULD BE IGNORED!")
 
 				_, err := LoadConfig(tmpDir.Path, true)
@@ -186,9 +190,6 @@ var _ = Describe("Config", func() {
 			})
 
 			It("should ignore non regular files", func() {
-				err = writeConfigDir(tmpDir)
-				Expect(err).Should(Succeed())
-
 				tmpDir.CreateSubFolder("subfolder")
 				tmpDir.CreateSubFolder("subfolder.yml")
 
@@ -199,13 +200,12 @@ var _ = Describe("Config", func() {
 		When("Config folder does not exist", func() {
 			It("should fail", func() {
 				_, err := LoadConfig(tmpDir.JoinPath("does-not-exist-config/"), true)
-				Expect(err).Should(Not(Succeed()))
+				Expect(err).Should(HaveOccurred())
 			})
 		})
 		When("config file is malformed", func() {
 			It("should return error", func() {
 				cfgFile := tmpDir.CreateStringFile("config.yml", "malformed_config")
-				Expect(cfgFile.Error).Should(Succeed())
 
 				c, err = LoadConfig(cfgFile.Path, true)
 				Expect(err).Should(HaveOccurred())
@@ -278,7 +278,7 @@ blocking:
 				data := "bootstrapDns: 0.0.0.0"
 
 				err := unmarshalConfig([]byte(data), &cfg)
-				Expect(err).ShouldNot(HaveOccurred())
+				Expect(err).Should(Succeed())
 				Expect(cfg.BootstrapDNS[0].Upstream.Host).Should(Equal("0.0.0.0"))
 			})
 			It("should be backwards compatible to 'single item definition'", func() {
@@ -290,7 +290,7 @@ bootstrapDns:
     - 0.0.0.0
 `
 				err := unmarshalConfig([]byte(data), &cfg)
-				Expect(err).ShouldNot(HaveOccurred())
+				Expect(err).Should(Succeed())
 				Expect(cfg.BootstrapDNS[0].Upstream.Host).Should(Equal("dns.example.com"))
 				Expect(cfg.BootstrapDNS[0].IPs).Should(HaveLen(1))
 			})
@@ -304,7 +304,7 @@ bootstrapDns:
   - upstream: 1.2.3.4
 `
 				err := unmarshalConfig([]byte(data), &cfg)
-				Expect(err).ShouldNot(HaveOccurred())
+				Expect(err).Should(Succeed())
 				Expect(cfg.BootstrapDNS).Should(HaveLen(2))
 				Expect(cfg.BootstrapDNS[0].Upstream.Host).Should(Equal("dns.example.com"))
 				Expect(cfg.BootstrapDNS[0].Upstream.Net).Should(Equal(NetProtocolTcpTls))
@@ -547,10 +547,10 @@ bootstrapDns:
 	)
 
 	Describe("SourceLoadingConfig", func() {
-		var cfg SourceLoadingConfig
+		var cfg SourceLoading
 
 		BeforeEach(func() {
-			cfg = SourceLoadingConfig{
+			cfg = SourceLoading{
 				Concurrency:   12,
 				RefreshPeriod: Duration(time.Hour),
 			}
@@ -561,8 +561,10 @@ bootstrapDns:
 				cfg.LogConfig(logger)
 
 				Expect(hook.Calls).ShouldNot(BeEmpty())
-				Expect(hook.Messages[0]).Should(Equal("concurrency = 12"))
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring("refresh = every 1 hour")))
+				Expect(hook.Messages).Should(ContainElements(
+					ContainSubstring("concurrency = 12"),
+					ContainSubstring("refresh = every 1 hour"),
+				))
 			})
 			When("refresh is disabled", func() {
 				BeforeEach(func() {
@@ -588,10 +590,10 @@ bootstrapDns:
 		})
 	})
 
-	Describe("StartStrategyType", func() {
-		Describe("StartStrategyTypeBlocking", func() {
+	Describe("InitStrategy", func() {
+		Describe("InitStrategyBlocking", func() {
 			It("runs in the current goroutine", func() {
-				sut := StartStrategyTypeBlocking
+				sut := InitStrategyBlocking
 				panicVal := new(int)
 
 				defer func() {
@@ -599,18 +601,20 @@ bootstrapDns:
 					Expect(recover()).Should(BeIdenticalTo(panicVal))
 				}()
 
-				_ = sut.do(func() error {
+				_ = sut.Do(context.Background(), func(context.Context) error {
+					return errors.New("trigger `logErr`")
+				}, func(err error) {
 					panic(panicVal)
-				}, nil)
+				})
 
 				Fail("unreachable")
 			})
 
 			It("logs errors and doesn't return them", func() {
-				sut := StartStrategyTypeBlocking
+				sut := InitStrategyBlocking
 				expectedErr := errors.New("test")
 
-				err := sut.do(func() error {
+				err := sut.Do(context.Background(), func(context.Context) error {
 					return expectedErr
 				}, func(err error) {
 					Expect(err).Should(MatchError(expectedErr))
@@ -618,11 +622,26 @@ bootstrapDns:
 
 				Expect(err).Should(Succeed())
 			})
+
+			It("logs panics and doesn't convert them to errors", func() {
+				sut := InitStrategyBlocking
+
+				logged := false
+				err := sut.Do(context.Background(), func(context.Context) error {
+					panic(struct{}{})
+				}, func(err error) {
+					logged = true
+					Expect(err).Should(MatchError(ContainSubstring("panic")))
+				})
+
+				Expect(err).Should(Succeed())
+				Expect(logged).Should(BeTrue())
+			})
 		})
 
-		Describe("StartStrategyTypeFailOnError", func() {
+		Describe("InitStrategyFailOnError", func() {
 			It("runs in the current goroutine", func() {
-				sut := StartStrategyTypeBlocking
+				sut := InitStrategyFailOnError
 				panicVal := new(int)
 
 				defer func() {
@@ -630,18 +649,20 @@ bootstrapDns:
 					Expect(recover()).Should(BeIdenticalTo(panicVal))
 				}()
 
-				_ = sut.do(func() error {
+				_ = sut.Do(context.Background(), func(context.Context) error {
+					return errors.New("trigger `logErr`")
+				}, func(err error) {
 					panic(panicVal)
-				}, nil)
+				})
 
 				Fail("unreachable")
 			})
 
 			It("logs errors and returns them", func() {
-				sut := StartStrategyTypeFailOnError
+				sut := InitStrategyFailOnError
 				expectedErr := errors.New("test")
 
-				err := sut.do(func() error {
+				err := sut.Do(context.Background(), func(context.Context) error {
 					return expectedErr
 				}, func(err error) {
 					Expect(err).Should(MatchError(expectedErr))
@@ -649,15 +670,30 @@ bootstrapDns:
 
 				Expect(err).Should(MatchError(expectedErr))
 			})
+
+			It("returns logs panics and converts them to errors", func() {
+				sut := InitStrategyFailOnError
+
+				logged := false
+				err := sut.Do(context.Background(), func(context.Context) error {
+					panic(struct{}{})
+				}, func(err error) {
+					logged = true
+					Expect(err).Should(MatchError(ContainSubstring("panic")))
+				})
+
+				Expect(err).Should(HaveOccurred())
+				Expect(logged).Should(BeTrue())
+			})
 		})
 
-		Describe("StartStrategyTypeFast", func() {
+		Describe("InitStrategyFast", func() {
 			It("runs in a new goroutine", func() {
-				sut := StartStrategyTypeFast
+				sut := InitStrategyFast
 				events := make(chan string)
 				wait := make(chan struct{})
 
-				err := sut.do(func() error {
+				err := sut.Do(context.Background(), func(context.Context) error {
 					events <- "start"
 					<-wait
 					events <- "done"
@@ -673,11 +709,11 @@ bootstrapDns:
 			})
 
 			It("logs errors", func() {
-				sut := StartStrategyTypeFast
+				sut := InitStrategyFast
 				expectedErr := errors.New("test")
 				wait := make(chan struct{})
 
-				err := sut.do(func() error {
+				err := sut.Do(context.Background(), func(context.Context) error {
 					return expectedErr
 				}, func(err error) {
 					Expect(err).Should(MatchError(expectedErr))
@@ -687,6 +723,47 @@ bootstrapDns:
 				Expect(err).Should(Succeed())
 				Eventually(wait, "50ms").Should(BeClosed())
 			})
+
+			It("logs panics", func() {
+				sut := InitStrategyFast
+				expectedErr := errors.New("test")
+				wait := make(chan struct{})
+
+				err := sut.Do(context.Background(), func(context.Context) error {
+					return expectedErr
+				}, func(err error) {
+					Expect(err).Should(MatchError(expectedErr))
+					close(wait)
+				})
+
+				Expect(err).Should(Succeed())
+				Eventually(wait, "50ms").Should(BeClosed())
+			})
+		})
+	})
+
+	Describe("BootstrapDNSConfig", func() {
+		It("is not enabled when empty", func() {
+			var sut BootstrapDNS
+
+			Expect(sut.IsEnabled()).Should(BeFalse())
+		})
+
+		It("is enabled if non empty", func() {
+			sut := BootstrapDNS{
+				BootstrappedUpstream{},
+				BootstrappedUpstream{},
+			}
+
+			Expect(sut.IsEnabled()).Should(BeTrue())
+		})
+
+		It("LogConfig panics", func() {
+			sut := BootstrapDNS{}
+
+			Expect(func() {
+				sut.LogConfig(logger)
+			}).Should(Panic())
 		})
 	})
 
@@ -700,8 +777,8 @@ bootstrapDns:
 			DeferCleanup(cancelFn)
 		})
 		It("handles panics", func() {
-			sut := SourceLoadingConfig{
-				Strategy: StartStrategyTypeFailOnError,
+			sut := SourceLoading{
+				Init: Init{Strategy: InitStrategyFailOnError},
 			}
 
 			panicMsg := "panic value"
@@ -716,8 +793,8 @@ bootstrapDns:
 		})
 
 		It("periodically calls refresh", func() {
-			sut := SourceLoadingConfig{
-				Strategy:      StartStrategyTypeFast,
+			sut := SourceLoading{
+				Init:          Init{Strategy: InitStrategyFast},
 				RefreshPeriod: Duration(5 * time.Millisecond),
 			}
 
@@ -766,14 +843,14 @@ bootstrapDns:
 			}
 
 			_, err := WithDefaults[T]()
-			Expect(err).ShouldNot(Succeed())
+			Expect(err).Should(HaveOccurred())
 		})
 	})
 })
 
 func defaultTestFileConfig(config *Config) {
 	Expect(config.Ports.DNS).Should(Equal(ListenConfig{"55553", ":55554", "[::1]:55555"}))
-	Expect(config.Upstreams.StartVerify).Should(BeFalse())
+	Expect(config.Upstreams.Init.Strategy).Should(Equal(InitStrategyFailOnError))
 	Expect(config.Upstreams.UserAgent).Should(Equal("testBlocky"))
 	Expect(config.Upstreams.Groups["default"]).Should(HaveLen(3))
 	Expect(config.Upstreams.Groups["default"][0].Host).Should(Equal("8.8.8.8"))
@@ -808,8 +885,9 @@ func defaultTestFileConfig(config *Config) {
 func writeConfigYml(tmpDir *helpertest.TmpFolder) *helpertest.TmpFile {
 	return tmpDir.CreateStringFile("config.yml",
 		"upstreams:",
-		"  startVerify: false",
 		"  userAgent: testBlocky",
+		"  init:",
+		"    strategy: failOnError",
 		"  groups:",
 		"    default:",
 		"      - tcp+udp:8.8.8.8",
@@ -866,11 +944,12 @@ func writeConfigYml(tmpDir *helpertest.TmpFolder) *helpertest.TmpFile {
 	)
 }
 
-func writeConfigDir(tmpDir *helpertest.TmpFolder) error {
-	f1 := tmpDir.CreateStringFile("config1.yaml",
+func writeConfigDir(tmpDir *helpertest.TmpFolder) {
+	tmpDir.CreateStringFile("config1.yaml",
 		"upstreams:",
-		"  startVerify: false",
 		"  userAgent: testBlocky",
+		"  init:",
+		"    strategy: failOnError",
 		"  groups:",
 		"    default:",
 		"      - tcp+udp:8.8.8.8",
@@ -889,11 +968,8 @@ func writeConfigDir(tmpDir *helpertest.TmpFolder) error {
 		"    - AAAA",
 		"    - A",
 	)
-	if f1.Error != nil {
-		return f1.Error
-	}
 
-	f2 := tmpDir.CreateStringFile("config2.yaml",
+	tmpDir.CreateStringFile("config2.yaml",
 		"blocking:",
 		"  blackLists:",
 		"    ads:",
@@ -931,8 +1007,6 @@ func writeConfigDir(tmpDir *helpertest.TmpFolder) error {
 		"logLevel: debug",
 		"minTlsServeVersion: 1.3",
 	)
-
-	return f2.Error
 }
 
 // Tiny helper to get a new pointer with a value.

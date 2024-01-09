@@ -66,15 +66,28 @@ All logging options are optional.
       privacy: true
     ```
 
+## Init Strategy
+
+A couple of features use an "init/loading strategy" which configures behavior at Blocky startup.  
+This applies to all of them. The default strategy is blocking.
+
+| strategy    | Description                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| blocking    | Initialization happens before DNS resolution starts. Any errors are logged, but Blocky continues running if possible.                                           |
+| failOnError | Like blocking but Blocky will exit with an error if initialization fails.                                                                                       |
+| fast        | Blocky starts serving DNS immediately and initialization happens in the background. The feature requiring initialization will enable later on (if it succeeds). |
+
 ## Upstreams configuration
 
-| Parameter             | Type                                 | Mandatory | Default value | Description                                                                                     |
-| --------------------- | ------------------------------------ | --------- | ------------- | ----------------------------------------------------------------------------------------------- |
-| usptreams.groups      | map of name to upstream              | yes       |               | Upstream DNS servers to use, in groups.                                                         |
-| usptreams.startVerify | bool                                 | no        | false         | If true, blocky will fail to start unless at least one upstream server per group is functional. |
-| usptreams.strategy    | enum (parallel_best, random, strict) | no        | parallel_best | Upstream server usage strategy.                                                                 |
-| usptreams.timeout     | duration                             | no        | 2s            | Upstream connection timeout.                                                                    |
-| usptreams.userAgent   | string                               | no        |               | HTTP User Agent when connecting to upstreams.                                                   |
+| Parameter               | Type                                 | Mandatory | Default value | Description                                    |
+| ----------------------- | ------------------------------------ | --------- | ------------- | ---------------------------------------------- |
+| usptreams.groups        | map of name to upstream              | yes       |               | Upstream DNS servers to use, in groups.        |
+| usptreams.init.strategy | enum (blocking, failOnError, fast)   | no        | blocking      | See [Init Strategy](#init-strategy) and below. |
+| usptreams.strategy      | enum (parallel_best, random, strict) | no        | parallel_best | Upstream server usage strategy.                |
+| usptreams.timeout       | duration                             | no        | 2s            | Upstream connection timeout.                   |
+| usptreams.userAgent     | string                               | no        |               | HTTP User Agent when connecting to upstreams.  |
+
+For `init.strategy`, the "init" is testing the given resolvers for each group. The potentially fatal error, depending on the strategy, is if a group has no functional resolvers.
 
 
 ### Upstream Groups
@@ -267,8 +280,8 @@ domain must be separated by a comma.
         otherdevice.lan: 192.168.178.15,2001:0db8:85a3:08d3:1319:8a2e:0370:7344
     ```
 
-This configuration will also resolve any subdomain of the defined domain. For example a query "printer.lan" or "
-my.printer.lan" will return 192.168.178.3 as IP address.
+This configuration will also resolve any subdomain of the defined domain, recursively. For example querying any of
+`printer.lan`, `my.printer.lan` or `i.love.my.printer.lan` will return 192.168.178.3.
 
 With the optional parameter `rewrite` you can replace domain part of the query with the defined part **before** the
 resolver lookup is performed.
@@ -693,10 +706,11 @@ Configuration parameters:
 
 | Parameter                | Type                           | Mandatory | Default value | Description                                     |
 | ------------------------ | ------------------------------ | --------- | ------------- | ----------------------------------------------- |
-| hostsFile.filePath       | string                         | no        |               | Path to hosts file (e.g. /etc/hosts on Linux)   |
+| hostsFile.sources        | list of string                 | no        |               | Host files (e.g. /etc/hosts on Linux)           |
 | hostsFile.hostsTTL       | duration (no units is minutes) | no        | 1h            | TTL                                             |
 | hostsFile.refreshPeriod  | duration format                | no        | 1h            | Time between hosts file refresh                 |
 | hostsFile.filterLoopback | bool                           | no        | false         | Filter loopback addresses (127.0.0.0/8 and ::1) |
+| hostsFile.loading        |                                | no        |               | See [Sources Loading](#sources-loading)         |
 
 !!! example
 
@@ -705,7 +719,10 @@ Configuration parameters:
       filePath: /etc/hosts
       hostsTTL: 1h
       refreshPeriod: 30m
+      loading:
+        strategy: fast
     ```
+
 
 ## Deliver EDE codes as EDNS0 option
 
@@ -847,14 +864,8 @@ Configures how HTTP(S) sources are downloaded:
 
 ### Strategy
 
-This configures how Blocky startup works.  
-The default strategy is blocking.
-
-| strategy    | Description                                                                                                                              |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| blocking    | all sources are loaded before DNS resolution starts                                                                                      |
-| failOnError | like blocking but blocky will shut down if any source fails to load                                                                      |
-| fast        | blocky starts serving DNS immediately and sources are loaded asynchronously. The features requiring the sources should enable soon after |
+See [Init Strategy](#init-strategy).  
+In this context, "init" is loading and parsing each source, and an error is a single source failing to load/parse.
 
 !!! example
 

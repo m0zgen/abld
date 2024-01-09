@@ -61,7 +61,6 @@ var _ = BeforeSuite(func() {
 
 		return response
 	})
-	DeferCleanup(googleMockUpstream.Close)
 
 	fritzboxMockUpstream = resolver.NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
 		response, err := util.NewMsgWithAnswer(
@@ -72,7 +71,6 @@ var _ = BeforeSuite(func() {
 
 		return response
 	})
-	DeferCleanup(fritzboxMockUpstream.Close)
 
 	clientMockUpstream = resolver.NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
 		var clientName string
@@ -89,33 +87,18 @@ var _ = BeforeSuite(func() {
 
 		return response
 	})
-	DeferCleanup(clientMockUpstream.Close)
 
 	upstreamClient = clientMockUpstream.Start()
 	upstreamFritzbox = fritzboxMockUpstream.Start()
 	upstreamGoogle = googleMockUpstream.Start()
 
 	tmpDir := NewTmpFolder("server")
-	Expect(tmpDir.Error).Should(Succeed())
-	DeferCleanup(tmpDir.Clean)
-
 	certPem := writeCertPem(tmpDir)
-	Expect(certPem.Error).Should(Succeed())
-
 	keyPem := writeKeyPem(tmpDir)
-	Expect(keyPem.Error).Should(Succeed())
-
 	doubleclickFile := tmpDir.CreateStringFile("doubleclick.net.txt", "doubleclick.net", "doubleclick.net.cn")
-	Expect(doubleclickFile.Error).Should(Succeed())
-
 	bildFile := tmpDir.CreateStringFile("www.bild.de.txt", "www.bild.de")
-	Expect(bildFile.Error).Should(Succeed())
-
 	heiseFile := tmpDir.CreateStringFile("heise.de.txt", "heise.de")
-	Expect(heiseFile.Error).Should(Succeed())
-
 	youtubeFile := tmpDir.CreateStringFile("youtube.com.txt", "youtube.com")
-	Expect(youtubeFile.Error).Should(Succeed())
 
 	cfg := &config.Config{
 		CustomDNS: config.CustomDNS{
@@ -165,7 +148,7 @@ var _ = BeforeSuite(func() {
 			Upstream: upstreamClient,
 		},
 
-		Ports: config.PortsConfig{
+		Ports: config.Ports{
 			DNS:   config.ListenConfig{GetStringPort(dnsBasePort)},
 			TLS:   config.ListenConfig{GetStringPort(tlsBasePort)},
 			HTTP:  config.ListenConfig{GetStringPort(httpBasePort)},
@@ -173,7 +156,7 @@ var _ = BeforeSuite(func() {
 		},
 		CertFile: certPem.Path,
 		KeyFile:  keyPem.Path,
-		Prometheus: config.MetricsConfig{
+		Prometheus: config.Metrics{
 			Enable: true,
 			Path:   "/metrics",
 		},
@@ -187,7 +170,7 @@ var _ = BeforeSuite(func() {
 
 	// start server
 	go sut.Start(ctx, errChan)
-	DeferCleanup(sut.Stop)
+	DeferCleanup(func() { Expect(sut.Stop(ctx)).Should(Succeed()) })
 
 	Consistently(errChan, "1s").ShouldNot(Receive())
 })
@@ -592,7 +575,7 @@ var _ = Describe("Running DNS server", func() {
 
 				_, err = NewServer(ctx, &cfg)
 
-				Expect(err).ShouldNot(Succeed())
+				Expect(err).Should(HaveOccurred())
 			})
 		})
 	})
@@ -620,7 +603,7 @@ var _ = Describe("Running DNS server", func() {
 						},
 					},
 					Blocking: config.Blocking{BlockType: "zeroIp"},
-					Ports: config.PortsConfig{
+					Ports: config.Ports{
 						DNS: config.ListenConfig{"127.0.0.1:" + GetStringPort(dnsBasePort2)},
 					},
 				})
@@ -666,7 +649,7 @@ var _ = Describe("Running DNS server", func() {
 						},
 					},
 					Blocking: config.Blocking{BlockType: "zeroIp"},
-					Ports: config.PortsConfig{
+					Ports: config.Ports{
 						DNS: config.ListenConfig{"127.0.0.1:" + GetStringPort(dnsBasePort2)},
 					},
 				})
@@ -681,13 +664,13 @@ var _ = Describe("Running DNS server", func() {
 
 				time.Sleep(100 * time.Millisecond)
 
-				err = server.Stop()
+				err = server.Stop(ctx)
 
 				// stop server, should be ok
 				Expect(err).Should(Succeed())
 
 				// stop again, should raise error
-				err = server.Stop()
+				err = server.Stop(ctx)
 
 				Expect(err).Should(HaveOccurred())
 			})
@@ -729,7 +712,7 @@ var _ = Describe("Running DNS server", func() {
 		It("should create self-signed certificate if key/cert files are not provided", func() {
 			cfg.KeyFile = ""
 			cfg.CertFile = ""
-			cfg.Ports = config.PortsConfig{
+			cfg.Ports = config.Ports{
 				HTTPS: []string{fmt.Sprintf(":%d", GetIntPort(httpsBasePort)+100)},
 			}
 			sut, err := NewServer(ctx, &cfg)

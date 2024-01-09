@@ -14,19 +14,18 @@ import (
 )
 
 var _ = Describe("Basic functional tests", func() {
-	var blocky, moka testcontainers.Container
+	var blocky testcontainers.Container
 	var err error
 
 	Describe("Container start", func() {
-		BeforeEach(func() {
-			moka, err = createDNSMokkaContainer("moka1", `A google/NOERROR("A 1.2.3.4 123")`)
+		BeforeEach(func(ctx context.Context) {
+			_, err = createDNSMokkaContainer(ctx, "moka1", `A google/NOERROR("A 1.2.3.4 123")`)
 
 			Expect(err).Should(Succeed())
-			DeferCleanup(moka.Terminate)
 		})
 		When("wrong port configuration is provided", func() {
-			BeforeEach(func() {
-				blocky, err = createBlockyContainer(tmpDir,
+			BeforeEach(func(ctx context.Context) {
+				blocky, err = createBlockyContainer(ctx, tmpDir,
 					"upstreams:",
 					"  groups:",
 					"    default:",
@@ -38,22 +37,20 @@ var _ = Describe("Basic functional tests", func() {
 				Expect(err).Should(HaveOccurred())
 
 				// check container exit status
-				state, err := blocky.State(context.Background())
+				state, err := blocky.State(ctx)
 				Expect(err).Should(Succeed())
 				Expect(state.ExitCode).Should(Equal(1))
-
-				DeferCleanup(blocky.Terminate)
 			})
-			It("should fail to start", func() {
+			It("should fail to start", func(ctx context.Context) {
 				Eventually(blocky.IsRunning, "5s", "2ms").Should(BeFalse())
 
-				Expect(getContainerLogs(blocky)).
+				Expect(getContainerLogs(ctx, blocky)).
 					Should(ContainElement(ContainSubstring("address already in use")))
 			})
 		})
 		When("Minimal configuration is provided", func() {
-			BeforeEach(func() {
-				blocky, err = createBlockyContainer(tmpDir,
+			BeforeEach(func(ctx context.Context) {
+				blocky, err = createBlockyContainer(ctx, tmpDir,
 					"upstreams:",
 					"  groups:",
 					"    default:",
@@ -61,21 +58,20 @@ var _ = Describe("Basic functional tests", func() {
 				)
 
 				Expect(err).Should(Succeed())
-				DeferCleanup(blocky.Terminate)
 			})
-			It("Should start and answer DNS queries", func() {
+			It("Should start and answer DNS queries", func(ctx context.Context) {
 				msg := util.NewMsgWithQuestion("google.de.", A)
 
-				Expect(doDNSRequest(blocky, msg)).
+				Expect(doDNSRequest(ctx, blocky, msg)).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("google.de.", A, "1.2.3.4"),
 							HaveTTL(BeNumerically("==", 123)),
 						))
 			})
-			It("should return 'healthy' container status (healthcheck)", func() {
+			It("should return 'healthy' container status (healthcheck)", func(ctx context.Context) {
 				Eventually(func(g Gomega) string {
-					state, err := blocky.State(context.Background())
+					state, err := blocky.State(ctx)
 					g.Expect(err).NotTo(HaveOccurred())
 
 					return state.Health.Status
@@ -84,8 +80,8 @@ var _ = Describe("Basic functional tests", func() {
 		})
 		Context("http port configuration", func() {
 			When("'httpPort' is not defined", func() {
-				BeforeEach(func() {
-					blocky, err = createBlockyContainer(tmpDir,
+				BeforeEach(func(ctx context.Context) {
+					blocky, err = createBlockyContainer(ctx, tmpDir,
 						"upstreams:",
 						"  groups:",
 						"    default:",
@@ -93,11 +89,10 @@ var _ = Describe("Basic functional tests", func() {
 					)
 
 					Expect(err).Should(Succeed())
-					DeferCleanup(blocky.Terminate)
 				})
 
-				It("should not open http port", func() {
-					host, port, err := getContainerHostPort(blocky, "4000/tcp")
+				It("should not open http port", func(ctx context.Context) {
+					host, port, err := getContainerHostPort(ctx, blocky, "4000/tcp")
 					Expect(err).Should(Succeed())
 
 					_, err = http.Get(fmt.Sprintf("http://%s", net.JoinHostPort(host, port)))
@@ -105,8 +100,8 @@ var _ = Describe("Basic functional tests", func() {
 				})
 			})
 			When("'httpPort' is defined", func() {
-				BeforeEach(func() {
-					blocky, err = createBlockyContainer(tmpDir,
+				BeforeEach(func(ctx context.Context) {
+					blocky, err = createBlockyContainer(ctx, tmpDir,
 						"upstreams:",
 						"  groups:",
 						"    default:",
@@ -116,10 +111,9 @@ var _ = Describe("Basic functional tests", func() {
 					)
 
 					Expect(err).Should(Succeed())
-					DeferCleanup(blocky.Terminate)
 				})
-				It("should serve http content", func() {
-					host, port, err := getContainerHostPort(blocky, "4000/tcp")
+				It("should serve http content", func(ctx context.Context) {
+					host, port, err := getContainerHostPort(ctx, blocky, "4000/tcp")
 					Expect(err).Should(Succeed())
 					url := fmt.Sprintf("http://%s", net.JoinHostPort(host, port))
 
@@ -142,15 +136,13 @@ var _ = Describe("Basic functional tests", func() {
 	})
 
 	Describe("Logging", func() {
-		BeforeEach(func() {
-			moka, err = createDNSMokkaContainer("moka1", `A google/NOERROR("A 1.2.3.4 123")`)
-
+		BeforeEach(func(ctx context.Context) {
+			_, err = createDNSMokkaContainer(ctx, "moka1", `A google/NOERROR("A 1.2.3.4 123")`)
 			Expect(err).Should(Succeed())
-			DeferCleanup(moka.Terminate)
 		})
 		When("log privacy is enabled", func() {
-			BeforeEach(func() {
-				blocky, err = createBlockyContainer(tmpDir,
+			BeforeEach(func(ctx context.Context) {
+				blocky, err = createBlockyContainer(ctx, tmpDir,
 					"upstreams:",
 					"  groups:",
 					"    default:",
@@ -160,29 +152,28 @@ var _ = Describe("Basic functional tests", func() {
 					"  privacy: true",
 				)
 				Expect(err).Should(Succeed())
-				DeferCleanup(blocky.Terminate)
 			})
-			It("should not log answers and questions", func() {
+			It("should not log answers and questions", func(ctx context.Context) {
 				msg := util.NewMsgWithQuestion("google.com.", A)
 
 				// do 2 requests
 
-				Expect(doDNSRequest(blocky, msg)).
+				Expect(doDNSRequest(ctx, blocky, msg)).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("google.com.", A, "1.2.3.4"),
 							HaveTTL(BeNumerically("==", 123)),
 						))
 
-				Expect(doDNSRequest(blocky, msg)).
+				Expect(doDNSRequest(ctx, blocky, msg)).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("google.com.", A, "1.2.3.4"),
 							HaveTTL(BeNumerically("<=", 123)),
 						))
 
-				Expect(getContainerLogs(blocky)).Should(Not(ContainElement(ContainSubstring("google.com"))))
-				Expect(getContainerLogs(blocky)).Should(Not(ContainElement(ContainSubstring("1.2.3.4"))))
+				Expect(getContainerLogs(ctx, blocky)).ShouldNot(ContainElement(ContainSubstring("google.com")))
+				Expect(getContainerLogs(ctx, blocky)).ShouldNot(ContainElement(ContainSubstring("1.2.3.4")))
 			})
 		})
 	})

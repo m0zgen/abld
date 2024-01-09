@@ -9,19 +9,19 @@ import (
 )
 
 var _ = Describe("FilteringConfig", func() {
-	var cfg FilteringConfig
+	var cfg Filtering
 
 	suiteBeforeEach()
 
 	BeforeEach(func() {
-		cfg = FilteringConfig{
+		cfg = Filtering{
 			QueryTypes: NewQTypeSet(AAAA, MX),
 		}
 	})
 
 	Describe("IsEnabled", func() {
 		It("should be false by default", func() {
-			cfg := FilteringConfig{}
+			cfg := Filtering{}
 			Expect(defaults.Set(&cfg)).Should(Succeed())
 
 			Expect(cfg.IsEnabled()).Should(BeFalse())
@@ -35,7 +35,7 @@ var _ = Describe("FilteringConfig", func() {
 
 		When("disabled", func() {
 			It("should be false", func() {
-				cfg := FilteringConfig{}
+				cfg := Filtering{}
 
 				Expect(cfg.IsEnabled()).Should(BeFalse())
 			})
@@ -47,9 +47,11 @@ var _ = Describe("FilteringConfig", func() {
 			cfg.LogConfig(logger)
 
 			Expect(hook.Calls).Should(HaveLen(3))
-			Expect(hook.Messages).Should(ContainElement(ContainSubstring("query types:")))
-			Expect(hook.Messages).Should(ContainElement(ContainSubstring("  - AAAA")))
-			Expect(hook.Messages).Should(ContainElement(ContainSubstring("  - MX")))
+			Expect(hook.Messages).Should(ContainElements(
+				ContainSubstring("query types:"),
+				ContainSubstring("  - AAAA"),
+				ContainSubstring("  - MX"),
+			))
 		})
 	})
 })

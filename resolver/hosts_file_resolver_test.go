@@ -19,7 +19,7 @@ var _ = Describe("HostsFileResolver", func() {
 		TTL = uint32(time.Now().Second())
 
 		sut       *HostsFileResolver
-		sutConfig config.HostsFileConfig
+		sutConfig config.HostsFile
 		m         *mockResolver
 		tmpDir    *TmpFolder
 		tmpFile   *TmpFile
@@ -41,17 +41,13 @@ var _ = Describe("HostsFileResolver", func() {
 		DeferCleanup(cancelFn)
 
 		tmpDir = NewTmpFolder("HostsFileResolver")
-		Expect(tmpDir.Error).Should(Succeed())
-		DeferCleanup(tmpDir.Clean)
-
 		tmpFile = writeHostFile(tmpDir)
-		Expect(tmpFile.Error).Should(Succeed())
 
-		sutConfig = config.HostsFileConfig{
+		sutConfig = config.HostsFile{
 			Sources:        config.NewBytesSources(tmpFile.Path),
 			HostsTTL:       config.Duration(time.Duration(TTL) * time.Second),
 			FilterLoopback: true,
-			Loading: config.SourceLoadingConfig{
+			Loading: config.SourceLoading{
 				RefreshPeriod:      -1,
 				MaxErrorsPerSource: 5,
 			},
@@ -86,7 +82,7 @@ var _ = Describe("HostsFileResolver", func() {
 	Describe("Using hosts file", func() {
 		When("Hosts file cannot be located", func() {
 			BeforeEach(func() {
-				sutConfig = config.HostsFileConfig{
+				sutConfig = config.HostsFile{
 					Sources:  config.NewBytesSources("/this/file/does/not/exist"),
 					HostsTTL: config.Duration(time.Duration(TTL) * time.Second),
 				}
@@ -165,7 +161,6 @@ var _ = Describe("HostsFileResolver", func() {
 					"127.0.0.x localhost",
 					"256.0.0.1 localhost",
 				)
-				Expect(tmpFile.Error).Should(Succeed())
 
 				sutConfig.Sources = config.NewBytesSources(tmpFile.Path)
 			})

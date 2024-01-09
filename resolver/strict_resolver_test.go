@@ -15,15 +15,10 @@ import (
 )
 
 var _ = Describe("StrictResolver", Label("strictResolver"), func() {
-	const (
-		verifyUpstreams   = true
-		noVerifyUpstreams = false
-	)
-
 	var (
-		sut       *StrictResolver
-		upstreams []config.Upstream
-		sutVerify bool
+		sut             *StrictResolver
+		sutInitStrategy config.InitStrategy
+		upstreams       []config.Upstream
 
 		err error
 
@@ -31,6 +26,10 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 
 		ctx      context.Context
 		cancelFn context.CancelFunc
+		timeout  = 2 * time.Second
+
+		testUpstream1 *MockUDPUpstreamServer
+		testUpstream2 *MockUDPUpstreamServer
 	)
 
 	Describe("Type", func() {
@@ -48,16 +47,17 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 			{Host: "127.0.0.2"},
 		}
 
-		sutVerify = noVerifyUpstreams
+		sutInitStrategy = config.InitStrategyBlocking
 
 		bootstrap = systemResolverBootstrap
 	})
 
 	JustBeforeEach(func() {
 		upstreamsCfg := defaultUpstreamsConfig
-		upstreamsCfg.StartVerify = sutVerify
+		upstreamsCfg.Init.Strategy = sutInitStrategy
 
 		sutConfig := config.NewUpstreamGroup("test", upstreamsCfg, upstreams)
+		sutConfig.Timeout = config.Duration(timeout)
 		sut, err = NewStrictResolver(ctx, sutConfig, bootstrap)
 	})
 
@@ -98,7 +98,6 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 
 				return
 			})
-			DeferCleanup(mockUpstream.Close)
 
 			upstreams = []config.Upstream{
 				{Host: "wrong"},
@@ -107,7 +106,7 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 		})
 
 		It("should start normally", func() {
-			Expect(err).Should(Not(HaveOccurred()))
+			Expect(err).Should(Succeed())
 		})
 	})
 
@@ -121,7 +120,7 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 
 		When("strict checking is enabled", func() {
 			BeforeEach(func() {
-				sutVerify = verifyUpstreams
+				sutInitStrategy = config.InitStrategyFailOnError
 			})
 			It("should fail to start", func() {
 				Expect(err).Should(HaveOccurred())
@@ -130,10 +129,10 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 
 		When("strict checking is disabled", func() {
 			BeforeEach(func() {
-				sutVerify = noVerifyUpstreams
+				sutInitStrategy = config.InitStrategyBlocking
 			})
 			It("should start", func() {
-				Expect(err).Should(Not(HaveOccurred()))
+				Expect(err).Should(Succeed())
 			})
 		})
 	})
@@ -144,10 +143,7 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 				When("they respond in time", func() {
 					BeforeEach(func() {
 						testUpstream1 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-						DeferCleanup(testUpstream1.Close)
-
 						testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.123")
-						DeferCleanup(testUpstream2.Close)
 
 						upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 					})
@@ -163,21 +159,13 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 								))
 					})
 				})
-				When("first upstream exceeds upstreamTimeout", func() {
+				When("first upstream times-out", func() {
 					BeforeEach(func() {
-						timeout := sut.cfg.Timeout.ToDuration()
-						testUpstream1 := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
-							response, err := util.NewMsgWithAnswer("example.com", 123, A, "123.124.122.1")
-							time.Sleep(2 * timeout)
-
-							Expect(err).To(Succeed())
-
-							return response
-						})
-						DeferCleanup(testUpstream1.Close)
+						testUpstream1 = NewMockUDPUpstreamServer().
+							WithAnswerRR("example.com 123 IN A 123.124.122.1").
+							WithDelay(2 * timeout)
 
 						testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.2")
-						DeferCleanup(testUpstream2.Close)
 
 						upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 					})
@@ -192,28 +180,16 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 							))
 					})
 				})
-				When("all upstreams exceed upsteamTimeout", func() {
-					BeforeEach(func() {
-						timeout := sut.cfg.Timeout.ToDuration()
-						testUpstream1 := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
-							response, err := util.NewMsgWithAnswer("example.com", 123, A, "123.124.122.1")
-							time.Sleep(2 * timeout)
+				When("all upstreams timeout", func() {
+					JustBeforeEach(func() {
+						testUpstream1 = NewMockUDPUpstreamServer().
+							WithAnswerRR("example.com 123 IN A 123.124.122.1").
+							WithDelay(2 * timeout)
 
-							Expect(err).To(Succeed())
+						testUpstream2 = NewMockUDPUpstreamServer().
+							WithAnswerRR("example.com 123 IN A 123.124.122.2").
+							WithDelay(2 * timeout)
 
-							return response
-						})
-						DeferCleanup(testUpstream1.Close)
-
-						testUpstream2 := NewMockUDPUpstreamServer().WithAnswerFn(func(request *dns.Msg) (response *dns.Msg) {
-							response, err := util.NewMsgWithAnswer("example.com", 123, A, "123.124.122.2")
-							time.Sleep(2 * timeout)
-
-							Expect(err).To(Succeed())
-
-							return response
-						})
-						DeferCleanup(testUpstream2.Close)
 						upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 					})
 					It("should return error", func() {
@@ -225,12 +201,9 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 			})
 			When("Only second is working", func() {
 				BeforeEach(func() {
-					testUpstream1 := config.Upstream{Host: "wrong"}
-
 					testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.123")
-					DeferCleanup(testUpstream2.Close)
 
-					upstreams = []config.Upstream{testUpstream1, testUpstream2.Start()}
+					upstreams = []config.Upstream{{Host: "wrong"}, testUpstream2.Start()}
 				})
 				It("Should use result from second one", func() {
 					request := newRequest("example.com.", A)
@@ -259,7 +232,6 @@ var _ = Describe("StrictResolver", Label("strictResolver"), func() {
 		When("only 1 upstream resolvers is defined", func() {
 			BeforeEach(func() {
 				mockUpstream := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-				DeferCleanup(mockUpstream.Close)
 
 				upstreams = []config.Upstream{mockUpstream.Start()}
 			})

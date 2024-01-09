@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"time"
 
@@ -25,8 +26,6 @@ var _ = Describe("FileWriter", func() {
 
 	JustBeforeEach(func() {
 		tmpDir = helpertest.NewTmpFolder("fileWriter")
-		Expect(tmpDir.Error).Should(Succeed())
-		DeferCleanup(tmpDir.Clean)
 	})
 
 	Describe("CSV writer", func() {
@@ -117,21 +116,15 @@ var _ = Describe("FileWriter", func() {
 					})
 				})
 
-				Eventually(func(g Gomega) int {
-					filesCount, err := tmpDir.CountFiles()
-					g.Expect(err).Should(Succeed())
+				Eventually(func(g Gomega) ([]fs.DirEntry, error) {
+					return os.ReadDir(tmpDir.Path)
+				}, "20s", "1s").Should(HaveLen(2))
 
-					return filesCount
-				}, "20s", "1s").Should(Equal(2))
+				writer.CleanUp()
 
-				go writer.CleanUp()
-
-				Eventually(func(g Gomega) int {
-					filesCount, err := tmpDir.CountFiles()
-					g.Expect(err).Should(Succeed())
-
-					return filesCount
-				}, "20s", "1s").Should(Equal(1))
+				Eventually(func(g Gomega) ([]fs.DirEntry, error) {
+					return os.ReadDir(tmpDir.Path)
+				}, "20s", "1s").Should(HaveLen(1))
 			})
 		})
 	})

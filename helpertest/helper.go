@@ -2,6 +2,7 @@ package helpertest
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -59,19 +60,23 @@ func TempFile(data string) *os.File {
 
 // TestServer creates temp http server with passed data
 func TestServer(data string) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		_, err := rw.Write([]byte(data))
 		if err != nil {
 			log.Log().Fatal("can't write to buffer:", err)
 		}
 	}))
+
+	ginkgo.DeferCleanup(srv.Close)
+
+	return srv
 }
 
 // DoGetRequest performs a GET request
-func DoGetRequest(url string,
+func DoGetRequest(ctx context.Context, url string,
 	fn func(w http.ResponseWriter, r *http.Request),
 ) (*httptest.ResponseRecorder, *bytes.Buffer) {
-	r, _ := http.NewRequest(http.MethodGet, url, nil)
+	r, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(fn)

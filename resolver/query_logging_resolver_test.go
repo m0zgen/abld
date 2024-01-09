@@ -40,7 +40,7 @@ func (m *SlowMockWriter) CleanUp() {
 var _ = Describe("QueryLoggingResolver", func() {
 	var (
 		sut        *QueryLoggingResolver
-		sutConfig  config.QueryLogConfig
+		sutConfig  config.QueryLog
 		m          *mockResolver
 		tmpDir     *TmpFolder
 		mockAnswer *dns.Msg
@@ -61,8 +61,6 @@ var _ = Describe("QueryLoggingResolver", func() {
 
 		mockAnswer = new(dns.Msg)
 		tmpDir = NewTmpFolder("queryLoggingResolver")
-		Expect(tmpDir.Error).Should(Succeed())
-		DeferCleanup(tmpDir.Clean)
 	})
 
 	JustBeforeEach(func() {
@@ -95,7 +93,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 	Describe("Process request", func() {
 		When("Resolver has no configuration", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					CreationAttempts: 1,
 					CreationCooldown: config.Duration(time.Millisecond),
 				}
@@ -113,7 +111,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 		})
 		When("Configuration with logging per client", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					Target:           tmpDir.Path,
 					Type:             config.QueryLogTypeCsvClient,
 					CreationAttempts: 1,
@@ -148,7 +146,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 							fmt.Sprintf("%s_client1.log", time.Now().Format("2006-01-02"))))
 
 						g.Expect(err).Should(Succeed())
-						g.Expect(csvLines).Should(Not(BeEmpty()))
+						g.Expect(csvLines).ShouldNot(BeEmpty())
 						g.Expect(csvLines[0][1]).Should(Equal("192.168.178.25"))
 						g.Expect(csvLines[0][2]).Should(Equal("client1"))
 						g.Expect(csvLines[0][4]).Should(Equal("reason"))
@@ -181,7 +179,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 		})
 		When("Configuration with logging in one file for all clients", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					Target:           tmpDir.Path,
 					Type:             config.QueryLogTypeCsv,
 					CreationAttempts: 1,
@@ -241,7 +239,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 		})
 		When("Configuration with specific fields to log", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					Target:           tmpDir.Path,
 					Type:             config.QueryLogTypeCsv,
 					CreationAttempts: 1,
@@ -289,7 +287,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 	Describe("Slow writer", func() {
 		When("writer is too slow", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					Type:             config.QueryLogTypeNone,
 					CreationAttempts: 1,
 					CreationCooldown: config.Duration(time.Millisecond),
@@ -312,7 +310,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 	Describe("Clean up of query log directory", func() {
 		When("fallback logger is enabled, log retention is enabled", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					LogRetentionDays: 7,
 					Type:             config.QueryLogTypeConsole,
 					CreationAttempts: 1,
@@ -325,7 +323,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 		})
 		When("log directory contains old files", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					Target:           tmpDir.Path,
 					Type:             config.QueryLogTypeCsv,
 					LogRetentionDays: 7,
@@ -339,21 +337,13 @@ var _ = Describe("QueryLoggingResolver", func() {
 				dateBefore9Days := time.Now().AddDate(0, 0, -9)
 
 				f1 := tmpDir.CreateEmptyFile(fmt.Sprintf("%s-test.log", dateBefore7Days.Format("2006-01-02")))
-				Expect(f1.Error).Should(Succeed())
-
 				f2 := tmpDir.CreateEmptyFile(fmt.Sprintf("%s-test.log", dateBefore9Days.Format("2006-01-02")))
-				Expect(f2.Error).Should(Succeed())
 
 				sut.doCleanUp()
 
 				Eventually(func(g Gomega) {
-					// file 1 exist
-					g.Expect(f1.Stat()).Should(Succeed())
-
-					// file 2 was deleted
-					ierr2 := f2.Stat()
-					g.Expect(ierr2).Should(HaveOccurred())
-					g.Expect(os.IsNotExist(ierr2)).Should(BeTrue())
+					g.Expect(f1.Path).Should(BeAnExistingFile())
+					g.Expect(f2.Path).ShouldNot(BeAnExistingFile())
 				}).Should(Succeed())
 			})
 		})
@@ -362,7 +352,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 	Describe("Wrong target configuration", func() {
 		When("mysql database path is wrong", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					Target:           "dummy",
 					Type:             config.QueryLogTypeMysql,
 					CreationAttempts: 1,
@@ -376,7 +366,7 @@ var _ = Describe("QueryLoggingResolver", func() {
 
 		When("postgresql database path is wrong", func() {
 			BeforeEach(func() {
-				sutConfig = config.QueryLogConfig{
+				sutConfig = config.QueryLog{
 					Target:           "dummy",
 					Type:             config.QueryLogTypePostgresql,
 					CreationAttempts: 1,

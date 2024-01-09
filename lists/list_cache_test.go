@@ -29,7 +29,7 @@ var _ = Describe("ListCache", func() {
 		server1, server2, server3      *httptest.Server
 
 		sut       *ListCache
-		sutConfig config.SourceLoadingConfig
+		sutConfig config.SourceLoading
 
 		listCacheType  ListCacheType
 		lists          map[string][]config.BytesSource
@@ -48,36 +48,26 @@ var _ = Describe("ListCache", func() {
 
 		listCacheType = ListCacheTypeBlacklist
 
-		sutConfig, err = config.WithDefaults[config.SourceLoadingConfig]()
+		sutConfig, err = config.WithDefaults[config.SourceLoading]()
 		Expect(err).Should(Succeed())
 
 		sutConfig.RefreshPeriod = -1
 
-		downloader = NewDownloader(config.DownloaderConfig{}, nil)
+		downloader = NewDownloader(config.Downloader{}, nil)
 		mockDownloader = nil
 
 		server1 = TestServer("blocked1.com\nblocked1a.com\n192.168.178.55")
-		DeferCleanup(server1.Close)
 		server2 = TestServer("blocked2.com")
-		DeferCleanup(server2.Close)
 		server3 = TestServer("blocked3.com\nblocked1a.com")
-		DeferCleanup(server3.Close)
 
 		tmpDir = NewTmpFolder("ListCache")
-		Expect(tmpDir.Error).Should(Succeed())
 		DeferCleanup(tmpDir.Clean)
 
 		emptyFile = tmpDir.CreateStringFile("empty", "#empty file")
-		Expect(emptyFile.Error).Should(Succeed())
-
 		emptyFile = tmpDir.CreateStringFile("empty", "#empty file")
-		Expect(emptyFile.Error).Should(Succeed())
 		file1 = tmpDir.CreateStringFile("file1", "blocked1.com", "blocked1a.com")
-		Expect(file1.Error).Should(Succeed())
 		file2 = tmpDir.CreateStringFile("file2", "blocked2.com")
-		Expect(file2.Error).Should(Succeed())
 		file3 = tmpDir.CreateStringFile("file3", "blocked3.com", "blocked1a.com")
-		Expect(file3.Error).Should(Succeed())
 	})
 
 	JustBeforeEach(func() {
@@ -362,7 +352,7 @@ var _ = Describe("ListCache", func() {
 		When("Text file has too many errors", func() {
 			BeforeEach(func() {
 				sutConfig.MaxErrorsPerSource = 0
-				sutConfig.Strategy = config.StartStrategyTypeFailOnError
+				sutConfig.Strategy = config.InitStrategyFailOnError
 				lists = map[string][]config.BytesSource{
 					"gr1": {
 						config.TextBytesSource("invaliddomain!"), // too many errors since `maxErrorsPerSource` is 0
@@ -423,16 +413,18 @@ var _ = Describe("ListCache", func() {
 
 			sut.LogConfig(logger)
 			Expect(hook.Calls).ShouldNot(BeEmpty())
-			Expect(hook.Messages).Should(ContainElement(ContainSubstring("gr1:")))
-			Expect(hook.Messages).Should(ContainElement(ContainSubstring("gr2:")))
-			Expect(hook.Messages).Should(ContainElement(ContainSubstring("TOTAL:")))
+			Expect(hook.Messages).Should(ContainElements(
+				ContainSubstring("gr1:"),
+				ContainSubstring("gr2:"),
+				ContainSubstring("TOTAL:"),
+			))
 		})
 	})
 
-	Describe("StartStrategy", func() {
+	Describe("loading strategy", func() {
 		When("async load is enabled", func() {
 			BeforeEach(func() {
-				sutConfig.Strategy = config.StartStrategyTypeFast
+				sutConfig.Strategy = config.InitStrategyFast
 
 				lists = map[string][]config.BytesSource{
 					"gr1": config.NewBytesSources("doesnotexist"),
@@ -455,7 +447,7 @@ func newMockDownloader(driver func(res chan<- string, err chan<- error)) *MockDo
 	return &MockDownloader{NewMockCallSequence(driver)}
 }
 
-func (m *MockDownloader) DownloadFile(_ string) (io.ReadCloser, error) {
+func (m *MockDownloader) DownloadFile(_ context.Context, _ string) (io.ReadCloser, error) {
 	str, err := m.Call()
 	if err != nil {
 		return nil, err

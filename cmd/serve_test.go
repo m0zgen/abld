@@ -24,8 +24,7 @@ var _ = Describe("Serve command", func() {
 	BeforeEach(func() {
 		port = helpertest.GetStringPort(basePort)
 		tmpDir = helpertest.NewTmpFolder("config")
-		Expect(tmpDir.Error).Should(Succeed())
-		DeferCleanup(tmpDir.Clean)
+
 		configPath = defaultConfigPath
 	})
 
@@ -39,9 +38,10 @@ var _ = Describe("Serve command", func() {
 					"      - 1.1.1.1",
 					"ports:",
 					"  dns: "+port)
-				Expect(cfgFile.Error).Should(Succeed())
+
 				os.Setenv(configFileEnvVar, cfgFile.Path)
 				DeferCleanup(func() { os.Unsetenv(configFileEnvVar) })
+
 				initConfig()
 			})
 
@@ -85,9 +85,10 @@ var _ = Describe("Serve command", func() {
 					"      - 1.1.1.1",
 					"ports:",
 					"  dns: "+port)
-				Expect(cfgFile.Error).Should(Succeed())
+
 				os.Setenv(configFileEnvVar, cfgFile.Path)
 				DeferCleanup(func() { os.Unsetenv(configFileEnvVar) })
+
 				initConfig()
 			})
 
@@ -102,8 +103,7 @@ var _ = Describe("Serve command", func() {
 			By("terminate with signal", func() {
 				var startError error
 				Eventually(errChan, "10s").Should(Receive(&startError))
-				Expect(startError).ShouldNot(BeNil())
-				Expect(startError.Error()).Should(ContainSubstring("address already in use"))
+				Expect(startError).Should(MatchError(ContainSubstring("address already in use")))
 			})
 		})
 	})
@@ -121,8 +121,7 @@ var _ = Describe("Serve command", func() {
 			By("server should terminate with error", func() {
 				var startError error
 				Eventually(errChan).Should(Receive(&startError))
-				Expect(startError).ShouldNot(BeNil())
-				Expect(startError.Error()).Should(ContainSubstring("unable to load configuration"))
+				Expect(startError).Should(MatchError(ContainSubstring("unable to load configuration")))
 			})
 		})
 	})

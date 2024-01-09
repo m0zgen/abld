@@ -109,17 +109,21 @@ func (v *TLSVersion) validate(logger *logrus.Entry) {
 // )
 type QueryLogType int16
 
-// StartStrategyType upstart strategy ENUM(
+// InitStrategy startup strategy ENUM(
 // blocking // synchronously download blocking lists on startup
 // failOnError // synchronously download blocking lists on startup and shutdown on error
 // fast // asyncronously download blocking lists on startup
 // )
-type StartStrategyType uint16
+type InitStrategy uint16
 
-func (s *StartStrategyType) do(setup func() error, logErr func(error)) error {
-	if *s == StartStrategyTypeFast {
+func (s InitStrategy) Do(ctx context.Context, init func(context.Context) error, logErr func(error)) error {
+	init = recoverToError(init, func(panicVal any) error {
+		return fmt.Errorf("panic during initialization: %v", panicVal)
+	})
+
+	if s == InitStrategyFast {
 		go func() {
-			err := setup()
+			err := init(ctx)
 			if err != nil {
 				logErr(err)
 			}
@@ -128,11 +132,11 @@ func (s *StartStrategyType) do(setup func() error, logErr func(error)) error {
 		return nil
 	}
 
-	err := setup()
+	err := init(ctx)
 	if err != nil {
 		logErr(err)
 
-		if *s == StartStrategyTypeFailOnError {
+		if s == InitStrategyFailOnError {
 			return err
 		}
 	}
@@ -167,48 +171,46 @@ func (l *ListenConfig) UnmarshalText(data []byte) error {
 	return nil
 }
 
-// UnmarshalYAML creates BootstrapDNSConfig from YAML
-func (b *BootstrapDNSConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var single BootstrappedUpstreamConfig
+// UnmarshalYAML creates BootstrapDNS from YAML
+func (b *BootstrapDNS) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var single BootstrappedUpstream
 	if err := unmarshal(&single); err == nil {
-		*b = BootstrapDNSConfig{single}
+		*b = BootstrapDNS{single}
 
 		return nil
 	}
 
-	// bootstrapDNSConfig is used to avoid infinite recursion:
-	// if we used BootstrapDNSConfig, unmarshal would just call us again.
-	var c bootstrapDNSConfig
+	// bootstrapDNS is used to avoid infinite recursion:
+	// if we used BootstrapDNS, unmarshal would just call us again.
+	var c bootstrapDNS
 	if err := unmarshal(&c); err != nil {
 		return err
 	}
 
-	*b = BootstrapDNSConfig(c)
+	*b = BootstrapDNS(c)
 
 	return nil
 }
 
-// UnmarshalYAML creates BootstrapConfig from YAML
-func (b *BootstrappedUpstreamConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+// UnmarshalYAML creates BootstrappedUpstream from YAML
+func (b *BootstrappedUpstream) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	if err := unmarshal(&b.Upstream); err == nil {
 		return nil
 	}
 
-	// bootstrapConfig is used to avoid infinite recursion:
-	// if we used BootstrapConfig, unmarshal would just call us again.
-	var c bootstrappedUpstreamConfig
+	// bootstrappedUpstream is used to avoid infinite recursion:
+	// if we used BootstrappedUpstream, unmarshal would just call us again.
+	var c bootstrappedUpstream
 	if err := unmarshal(&c); err != nil {
 		return err
 	}
 
-	*b = BootstrappedUpstreamConfig(c)
+	*b = BootstrappedUpstream(c)
 
 	return nil
 }
 
 // Config main configuration
-//
-//nolint:maligned
 type Config struct {
 	Upstreams        Upstreams           `yaml:"upstreams"`
 	ConnectIPVersion IPVersion           `yaml:"connectIPVersion"`
@@ -216,19 +218,19 @@ type Config struct {
 	Conditional      ConditionalUpstream `yaml:"conditional"`
 	Blocking         Blocking            `yaml:"blocking"`
 	ClientLookup     ClientLookup        `yaml:"clientLookup"`
-	Caching          CachingConfig       `yaml:"caching"`
-	QueryLog         QueryLogConfig      `yaml:"queryLog"`
-	Prometheus       MetricsConfig       `yaml:"prometheus"`
-	Redis            RedisConfig         `yaml:"redis"`
+	Caching          Caching             `yaml:"caching"`
+	QueryLog         QueryLog            `yaml:"queryLog"`
+	Prometheus       Metrics             `yaml:"prometheus"`
+	Redis            Redis               `yaml:"redis"`
 	Log              log.Config          `yaml:"log"`
-	Ports            PortsConfig         `yaml:"ports"`
+	Ports            Ports               `yaml:"ports"`
 	MinTLSServeVer   TLSVersion          `yaml:"minTlsServeVersion" default:"1.2"`
 	CertFile         string              `yaml:"certFile"`
 	KeyFile          string              `yaml:"keyFile"`
-	BootstrapDNS     BootstrapDNSConfig  `yaml:"bootstrapDns"`
-	HostsFile        HostsFileConfig     `yaml:"hostsFile"`
+	BootstrapDNS     BootstrapDNS        `yaml:"bootstrapDns"`
+	HostsFile        HostsFile           `yaml:"hostsFile"`
 	FQDNOnly         FQDNOnly            `yaml:"fqdnOnly"`
-	Filtering        FilteringConfig     `yaml:"filtering"`
+	Filtering        Filtering           `yaml:"filtering"`
 	EDE              EDE                 `yaml:"ede"`
 	ECS              ECS                 `yaml:"ecs"`
 	SUDN             SUDN                `yaml:"specialUseDomains"`
@@ -251,48 +253,44 @@ type Config struct {
 	} `yaml:",inline"`
 }
 
-type PortsConfig struct {
+type Ports struct {
 	DNS   ListenConfig `yaml:"dns" default:"53"`
 	HTTP  ListenConfig `yaml:"http"`
 	HTTPS ListenConfig `yaml:"https"`
 	TLS   ListenConfig `yaml:"tls"`
 }
 
-func (c *PortsConfig) LogConfig(logger *logrus.Entry) {
+func (c *Ports) LogConfig(logger *logrus.Entry) {
 	logger.Infof("DNS   = %s", c.DNS)
 	logger.Infof("TLS   = %s", c.TLS)
 	logger.Infof("HTTP  = %s", c.HTTP)
 	logger.Infof("HTTPS = %s", c.HTTPS)
 }
 
-// split in two types to avoid infinite recursion. See `BootstrapDNSConfig.UnmarshalYAML`.
+// split in two types to avoid infinite recursion. See `BootstrapDNS.UnmarshalYAML`.
 type (
-	BootstrapDNSConfig bootstrapDNSConfig
-	bootstrapDNSConfig []BootstrappedUpstreamConfig
+	BootstrapDNS bootstrapDNS
+	bootstrapDNS []BootstrappedUpstream
 )
 
-// split in two types to avoid infinite recursion. See `BootstrappedUpstreamConfig.UnmarshalYAML`.
+func (b *BootstrapDNS) IsEnabled() bool {
+	return len(*b) != 0
+}
+
+func (b *BootstrapDNS) LogConfig(*logrus.Entry) {
+	// This should not be called, at least for now:
+	// The Boostrap resolver is not in the chain and thus its config is not logged
+	panic("not implemented")
+}
+
+// split in two types to avoid infinite recursion. See `BootstrappedUpstream.UnmarshalYAML`.
 type (
-	BootstrappedUpstreamConfig bootstrappedUpstreamConfig
-	bootstrappedUpstreamConfig struct {
+	BootstrappedUpstream bootstrappedUpstream
+	bootstrappedUpstream struct {
 		Upstream Upstream `yaml:"upstream"`
 		IPs      []net.IP `yaml:"ips"`
 	}
 )
-
-// RedisConfig configuration for the redis connection
-type RedisConfig struct {
-	Address            string   `yaml:"address"`
-	Username           string   `yaml:"username" default:""`
-	Password           string   `yaml:"password" default:""`
-	Database           int      `yaml:"database" default:"0"`
-	Required           bool     `yaml:"required" default:"false"`
-	ConnectionAttempts int      `yaml:"connectionAttempts" default:"3"`
-	ConnectionCooldown Duration `yaml:"connectionCooldown" default:"1s"`
-	SentinelUsername   string   `yaml:"sentinelUsername" default:""`
-	SentinelPassword   string   `yaml:"sentinelPassword" default:""`
-	SentinelAddresses  []string `yaml:"sentinelAddresses"`
-}
 
 type (
 	FQDNOnly = toEnable
@@ -313,18 +311,27 @@ func (c *toEnable) LogConfig(logger *logrus.Entry) {
 	logger.Info("enabled")
 }
 
-type SourceLoadingConfig struct {
-	Concurrency        uint              `yaml:"concurrency" default:"4"`
-	MaxErrorsPerSource int               `yaml:"maxErrorsPerSource" default:"5"`
-	RefreshPeriod      Duration          `yaml:"refreshPeriod" default:"4h"`
-	Strategy           StartStrategyType `yaml:"strategy" default:"blocking"`
-	Downloads          DownloaderConfig  `yaml:"downloads"`
+type Init struct {
+	Strategy InitStrategy `yaml:"strategy" default:"blocking"`
 }
 
-func (c *SourceLoadingConfig) LogConfig(logger *logrus.Entry) {
+func (c *Init) LogConfig(logger *logrus.Entry) {
+	logger.Debugf("strategy = %s", c.Strategy)
+}
+
+type SourceLoading struct {
+	Init `yaml:",inline"`
+
+	Concurrency        uint       `yaml:"concurrency" default:"4"`
+	MaxErrorsPerSource int        `yaml:"maxErrorsPerSource" default:"5"`
+	RefreshPeriod      Duration   `yaml:"refreshPeriod" default:"4h"`
+	Downloads          Downloader `yaml:"downloads"`
+}
+
+func (c *SourceLoading) LogConfig(logger *logrus.Entry) {
+	c.Init.LogConfig(logger)
 	logger.Infof("concurrency = %d", c.Concurrency)
 	logger.Debugf("maxErrorsPerSource = %d", c.MaxErrorsPerSource)
-	logger.Debugf("strategy = %s", c.Strategy)
 
 	if c.RefreshPeriod.IsAboveZero() {
 		logger.Infof("refresh = every %s", c.RefreshPeriod)
@@ -336,36 +343,28 @@ func (c *SourceLoadingConfig) LogConfig(logger *logrus.Entry) {
 	log.WithIndent(logger, "  ", c.Downloads.LogConfig)
 }
 
-func (c *SourceLoadingConfig) StartPeriodicRefresh(ctx context.Context,
-	refresh func(context.Context) error,
-	logErr func(error),
+func (c *SourceLoading) StartPeriodicRefresh(
+	ctx context.Context, refresh func(context.Context) error, logErr func(error),
 ) error {
-	refreshAndRecover := func(ctx context.Context) (rerr error) {
-		defer func() {
-			if val := recover(); val != nil {
-				rerr = fmt.Errorf("refresh function panicked: %v", val)
-			}
-		}()
-
-		return refresh(ctx)
-	}
-
-	err := c.Strategy.do(func() error { return refreshAndRecover(context.Background()) }, logErr)
+	err := c.Strategy.Do(ctx, refresh, logErr)
 	if err != nil {
 		return err
 	}
 
 	if c.RefreshPeriod > 0 {
-		go c.periodically(ctx, refreshAndRecover, logErr)
+		go c.periodically(ctx, refresh, logErr)
 	}
 
 	return nil
 }
 
-func (c *SourceLoadingConfig) periodically(ctx context.Context,
-	refresh func(context.Context) error,
-	logErr func(error),
+func (c *SourceLoading) periodically(
+	ctx context.Context, refresh func(context.Context) error, logErr func(error),
 ) {
+	refresh = recoverToError(refresh, func(panicVal any) error {
+		return fmt.Errorf("panic during refresh: %v", panicVal)
+	})
+
 	ticker := time.NewTicker(c.RefreshPeriod.ToDuration())
 	defer ticker.Stop()
 
@@ -383,13 +382,25 @@ func (c *SourceLoadingConfig) periodically(ctx context.Context,
 	}
 }
 
-type DownloaderConfig struct {
+func recoverToError(do func(context.Context) error, onPanic func(any) error) func(context.Context) error {
+	return func(ctx context.Context) (rerr error) {
+		defer func() {
+			if val := recover(); val != nil {
+				rerr = onPanic(val)
+			}
+		}()
+
+		return do(ctx)
+	}
+}
+
+type Downloader struct {
 	Timeout  Duration `yaml:"timeout" default:"5s"`
 	Attempts uint     `yaml:"attempts" default:"3"`
 	Cooldown Duration `yaml:"cooldown" default:"500ms"`
 }
 
-func (c *DownloaderConfig) LogConfig(logger *logrus.Entry) {
+func (c *Downloader) LogConfig(logger *logrus.Entry) {
 	logger.Infof("timeout = %s", c.Timeout)
 	logger.Infof("attempts = %d", c.Attempts)
 	logger.Debugf("cooldown = %s", c.Cooldown)
@@ -539,16 +550,22 @@ func (cfg *Config) migrate(logger *logrus.Entry) bool {
 				cfg.Filtering.QueryTypes.Insert(dns.Type(dns.TypeAAAA))
 			}
 		}),
-		"port":                Move(To("ports.dns", &cfg.Ports)),
-		"httpPort":            Move(To("ports.http", &cfg.Ports)),
-		"httpsPort":           Move(To("ports.https", &cfg.Ports)),
-		"tlsPort":             Move(To("ports.tls", &cfg.Ports)),
-		"logLevel":            Move(To("log.level", &cfg.Log)),
-		"logFormat":           Move(To("log.format", &cfg.Log)),
-		"logPrivacy":          Move(To("log.privacy", &cfg.Log)),
-		"logTimestamp":        Move(To("log.timestamp", &cfg.Log)),
-		"startVerifyUpstream": Move(To("upstreams.startVerify", &cfg.Upstreams)),
-		"dohUserAgent":        Move(To("upstreams.userAgent", &cfg.Upstreams)),
+		"port":         Move(To("ports.dns", &cfg.Ports)),
+		"httpPort":     Move(To("ports.http", &cfg.Ports)),
+		"httpsPort":    Move(To("ports.https", &cfg.Ports)),
+		"tlsPort":      Move(To("ports.tls", &cfg.Ports)),
+		"logLevel":     Move(To("log.level", &cfg.Log)),
+		"logFormat":    Move(To("log.format", &cfg.Log)),
+		"logPrivacy":   Move(To("log.privacy", &cfg.Log)),
+		"logTimestamp": Move(To("log.timestamp", &cfg.Log)),
+		"dohUserAgent": Move(To("upstreams.userAgent", &cfg.Upstreams)),
+		"startVerifyUpstream": Apply(To("upstreams.init.strategy", &cfg.Upstreams.Init), func(value bool) {
+			if value {
+				cfg.Upstreams.Init.Strategy = InitStrategyFailOnError
+			} else {
+				cfg.Upstreams.Init.Strategy = InitStrategyFast
+			}
+		}),
 	})
 
 	usesDepredOpts = cfg.Blocking.migrate(logger) || usesDepredOpts
@@ -559,6 +576,7 @@ func (cfg *Config) migrate(logger *logrus.Entry) bool {
 
 func (cfg *Config) validate(logger *logrus.Entry) {
 	cfg.MinTLSServeVer.validate(logger)
+	cfg.Upstreams.validate(logger)
 }
 
 // ConvertPort converts string representation into a valid port (0 - 65535)

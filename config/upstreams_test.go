@@ -54,9 +54,30 @@ var _ = Describe("ParallelBestConfig", func() {
 				cfg.LogConfig(logger)
 
 				Expect(hook.Calls).ShouldNot(BeEmpty())
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring("timeout:")))
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring("groups:")))
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring(":host2:")))
+				Expect(hook.Messages).Should(ContainElements(
+					ContainSubstring("timeout:"),
+					ContainSubstring("groups:"),
+					ContainSubstring(":host2:"),
+				))
+			})
+		})
+
+		Describe("validate", func() {
+			It("should compute defaults", func() {
+				cfg.Timeout = -1
+
+				cfg.validate(logger)
+
+				Expect(cfg.Timeout).Should(BeNumerically(">", 0))
+
+				Expect(hook.Calls).ShouldNot(BeEmpty())
+				Expect(hook.Messages).Should(ContainElement(ContainSubstring("timeout")))
+			})
+
+			It("should not override valid user values", func() {
+				cfg.validate(logger)
+
+				Expect(hook.Messages).ShouldNot(ContainElement(ContainSubstring("timeout")))
 			})
 		})
 	})
@@ -102,10 +123,12 @@ var _ = Describe("ParallelBestConfig", func() {
 				cfg.LogConfig(logger)
 
 				Expect(hook.Calls).ShouldNot(BeEmpty())
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring("group: test")))
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring("upstreams:")))
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring(":host1:")))
-				Expect(hook.Messages).Should(ContainElement(ContainSubstring(":host2:")))
+				Expect(hook.Messages).Should(ContainElements(
+					ContainSubstring("group: test"),
+					ContainSubstring("upstreams:"),
+					ContainSubstring(":host1:"),
+					ContainSubstring(":host2:"),
+				))
 			})
 		})
 	})

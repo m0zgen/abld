@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -15,28 +16,26 @@ import (
 )
 
 var _ = Describe("Metrics functional tests", func() {
-	var blocky, moka, httpServer1, httpServer2 testcontainers.Container
+	var blocky testcontainers.Container
 	var err error
 	var metricsURL string
 
 	Describe("Metrics", func() {
-		BeforeEach(func() {
-			moka, err = createDNSMokkaContainer("moka1", `A google/NOERROR("A 1.2.3.4 123")`)
-
+		BeforeEach(func(ctx context.Context) {
+			_, err = createDNSMokkaContainer(ctx, "moka1", `A google/NOERROR("A 1.2.3.4 123")`)
 			Expect(err).Should(Succeed())
-			DeferCleanup(moka.Terminate)
 
-			httpServer1, err = createHTTPServerContainer("httpserver1", tmpDir, "list1.txt", "domain1.com")
-
+			_, err = createHTTPServerContainer(ctx, "httpserver1", tmpDir, "list1.txt", "domain1.com")
 			Expect(err).Should(Succeed())
-			DeferCleanup(httpServer1.Terminate)
 
-			httpServer2, err = createHTTPServerContainer("httpserver2", tmpDir, "list2.txt", "domain1.com", "domain2", "domain3")
-
+			_, err = createHTTPServerContainer(ctx, "httpserver2", tmpDir, "list2.txt",
+				"domain1.com", "domain2", "domain3")
 			Expect(err).Should(Succeed())
-			DeferCleanup(httpServer2.Terminate)
 
-			blocky, err = createBlockyContainer(tmpDir,
+			_, err = createHTTPServerContainer(ctx, "httpserver2", tmpDir, "list2.txt", "domain1.com", "domain2", "domain3")
+			Expect(err).Should(Succeed())
+
+			blocky, err = createBlockyContainer(ctx, tmpDir,
 				"upstreams:",
 				"  groups:",
 				"    default:",
@@ -52,94 +51,93 @@ var _ = Describe("Metrics functional tests", func() {
 				"prometheus:",
 				"  enable: true",
 			)
-
 			Expect(err).Should(Succeed())
-			DeferCleanup(blocky.Terminate)
 
-			host, port, err := getContainerHostPort(blocky, "4000/tcp")
+			host, port, err := getContainerHostPort(ctx, blocky, "4000/tcp")
 			Expect(err).Should(Succeed())
 
 			metricsURL = fmt.Sprintf("http://%s/metrics", net.JoinHostPort(host, port))
 		})
 		When("Blocky is started", func() {
-			It("Should provide 'blocky_build_info' prometheus metrics", func() {
-				Eventually(fetchBlockyMetrics).WithArguments(metricsURL).
+			It("Should provide 'blocky_build_info' prometheus metrics", func(ctx context.Context) {
+				Eventually(fetchBlockyMetrics).WithArguments(ctx, metricsURL).
 					Should(ContainElement(ContainSubstring("blocky_build_info")))
 			})
 
-			It("Should provide 'blocky_blocking_enabled' prometheus metrics", func() {
-				Eventually(fetchBlockyMetrics, "30s", "2ms").WithArguments(metricsURL).
+			It("Should provide 'blocky_blocking_enabled' prometheus metrics", func(ctx context.Context) {
+				Eventually(fetchBlockyMetrics, "30s", "2ms").WithArguments(ctx, metricsURL).
 					Should(ContainElement("blocky_blocking_enabled 1"))
 			})
 		})
 
 		When("Some query results are cached", func() {
-			BeforeEach(func() {
-				Eventually(fetchBlockyMetrics).WithArguments(metricsURL).
-					Should(
-						SatisfyAll(
-							ContainElement("blocky_cache_entry_count 0"),
-							ContainElement("blocky_cache_hit_count 0"),
-							ContainElement("blocky_cache_miss_count 0"),
-						))
+			BeforeEach(func(ctx context.Context) {
+				Eventually(fetchBlockyMetrics).WithArguments(ctx, metricsURL).
+					Should(ContainElements(
+						"blocky_cache_entry_count 0",
+						"blocky_cache_hit_count 0",
+						"blocky_cache_miss_count 0",
+					))
 			})
 
-			It("Should increment cache counts", func() {
+			It("Should increment cache counts", func(ctx context.Context) {
 				msg := util.NewMsgWithQuestion("google.de.", A)
 
 				By("first query, should increment the cache miss count and the total count", func() {
-					Expect(doDNSRequest(blocky, msg)).
+					Expect(doDNSRequest(ctx, blocky, msg)).
 						Should(
 							SatisfyAll(
 								BeDNSRecord("google.de.", A, "1.2.3.4"),
 								HaveTTL(BeNumerically("==", 123)),
 							))
 
-					Eventually(fetchBlockyMetrics).WithArguments(metricsURL).
-						Should(
-							SatisfyAll(
-								ContainElement("blocky_cache_entry_count 1"),
-								ContainElement("blocky_cache_hit_count 0"),
-								ContainElement("blocky_cache_miss_count 1"),
-							))
+					Eventually(fetchBlockyMetrics).WithArguments(ctx, metricsURL).
+						Should(ContainElements(
+							"blocky_cache_entry_count 1",
+							"blocky_cache_hit_count 0",
+							"blocky_cache_miss_count 1",
+						))
 				})
 
 				By("Same query again, should increment the cache hit count", func() {
-					Expect(doDNSRequest(blocky, msg)).
+					Expect(doDNSRequest(ctx, blocky, msg)).
 						Should(
 							SatisfyAll(
 								BeDNSRecord("google.de.", A, "1.2.3.4"),
 								HaveTTL(BeNumerically("<=", 123)),
 							))
 
-					Eventually(fetchBlockyMetrics).WithArguments(metricsURL).
-						Should(
-							SatisfyAll(
-								ContainElement("blocky_cache_entry_count 1"),
-								ContainElement("blocky_cache_hit_count 1"),
-								ContainElement("blocky_cache_miss_count 1"),
-							))
+					Eventually(fetchBlockyMetrics).WithArguments(ctx, metricsURL).
+						Should(ContainElements(
+							"blocky_cache_entry_count 1",
+							"blocky_cache_hit_count 1",
+							"blocky_cache_miss_count 1",
+						))
 				})
 			})
 		})
 
 		When("Lists are loaded", func() {
-			It("Should expose list cache sizes per group as metrics", func() {
-				Eventually(fetchBlockyMetrics).WithArguments(metricsURL).
-					Should(
-						SatisfyAll(
-							ContainElement("blocky_blacklist_cache{group=\"group1\"} 1"),
-							ContainElement("blocky_blacklist_cache{group=\"group2\"} 3"),
-						))
+			It("Should expose list cache sizes per group as metrics", func(ctx context.Context) {
+				Eventually(fetchBlockyMetrics).WithArguments(ctx, metricsURL).
+					Should(ContainElements(
+						"blocky_blacklist_cache{group=\"group1\"} 1",
+						"blocky_blacklist_cache{group=\"group2\"} 3",
+					))
 			})
 		})
 	})
 })
 
-func fetchBlockyMetrics(url string) ([]string, error) {
+func fetchBlockyMetrics(ctx context.Context, url string) ([]string, error) {
 	var metrics []string
 
-	r, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

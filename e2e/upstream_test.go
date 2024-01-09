@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"context"
+
 	. "github.com/0xERR0R/blocky/helpertest"
 	"github.com/0xERR0R/blocky/util"
 	"github.com/miekg/dns"
@@ -13,111 +15,104 @@ var _ = Describe("Upstream resolver configuration tests", func() {
 	var blocky testcontainers.Container
 	var err error
 
-	Describe("'upstreams.startVerify' parameter handling", func() {
-		When("'upstreams.startVerify' is false and upstream server as IP is not reachable", func() {
-			BeforeEach(func() {
-				blocky, err = createBlockyContainer(tmpDir,
+	Describe("'upstreams.init.strategy' parameter handling", func() {
+		When("'upstreams.init.strategy' is fast and upstream server as IP is not reachable", func() {
+			BeforeEach(func(ctx context.Context) {
+				blocky, err = createBlockyContainer(ctx, tmpDir,
 					"log:",
 					"  level: warn",
 					"upstreams:",
 					"  groups:",
 					"    default:",
 					"      - 192.192.192.192",
-					"  startVerify: false",
+					"  init:",
+					"    strategy: fast",
 				)
-
 				Expect(err).Should(Succeed())
-				DeferCleanup(blocky.Terminate)
 			})
-			It("should start even if upstream server is not reachable", func() {
+			It("should start even if upstream server is not reachable", func(ctx context.Context) {
 				Expect(blocky.IsRunning()).Should(BeTrue())
-				Expect(getContainerLogs(blocky)).Should(BeEmpty())
+				Eventually(ctx, func() ([]string, error) {
+					return getContainerLogs(ctx, blocky)
+				}).Should(ContainElement(ContainSubstring("initial resolver test failed")))
 			})
 		})
-		When("'upstreams.startVerify' is false and upstream server as host name is not reachable", func() {
-			BeforeEach(func() {
-				blocky, err = createBlockyContainer(tmpDir,
+		When("'upstreams.init.strategy' is fast and upstream server as host name is not reachable", func() {
+			BeforeEach(func(ctx context.Context) {
+				blocky, err = createBlockyContainer(ctx, tmpDir,
 					"log:",
 					"  level: warn",
 					"upstreams:",
 					"  groups:",
 					"    default:",
 					"      - some.wrong.host",
-					"  startVerify: false",
+					"  init:",
+					"    strategy: fast",
 				)
-
 				Expect(err).Should(Succeed())
-				DeferCleanup(blocky.Terminate)
 			})
-			It("should start even if upstream server is not reachable", func() {
+			It("should start even if upstream server is not reachable", func(ctx context.Context) {
 				Expect(blocky.IsRunning()).Should(BeTrue())
-				Expect(getContainerLogs(blocky)).Should(BeEmpty())
+				Expect(getContainerLogs(ctx, blocky)).Should(ContainElement(ContainSubstring("initial resolver test failed")))
 			})
 		})
-		When("'upstreams.startVerify' is true and upstream as IP address server is not reachable", func() {
-			BeforeEach(func() {
-				blocky, err = createBlockyContainer(tmpDir,
+		When("'upstreams.init.strategy' is failOnError and upstream as IP address server is not reachable", func() {
+			BeforeEach(func(ctx context.Context) {
+				blocky, err = createBlockyContainer(ctx, tmpDir,
 					"upstreams:",
 					"  groups:",
 					"    default:",
 					"      - 192.192.192.192",
-					"  startVerify: true",
+					"  init:",
+					"    strategy: failOnError",
 				)
-
 				Expect(err).Should(HaveOccurred())
-				DeferCleanup(blocky.Terminate)
 			})
-			It("should not start", func() {
+			It("should not start", func(ctx context.Context) {
 				Expect(blocky.IsRunning()).Should(BeFalse())
-				Expect(getContainerLogs(blocky)).
+				Expect(getContainerLogs(ctx, blocky)).
 					Should(ContainElement(ContainSubstring("no valid upstream for group default")))
 			})
 		})
-		When("'upstreams.startVerify' is true and upstream server as host name is not reachable", func() {
-			BeforeEach(func() {
-				blocky, err = createBlockyContainer(tmpDir,
+		When("'upstreams.init.strategy' is failOnError and upstream server as host name is not reachable", func() {
+			BeforeEach(func(ctx context.Context) {
+				blocky, err = createBlockyContainer(ctx, tmpDir,
 					"upstreams:",
 					"  groups:",
 					"    default:",
 					"      - some.wrong.host",
-					"  startVerify: true",
+					"  init:",
+					"    strategy: failOnError",
 				)
-
 				Expect(err).Should(HaveOccurred())
-				DeferCleanup(blocky.Terminate)
 			})
-			It("should not start", func() {
+			It("should not start", func(ctx context.Context) {
 				Expect(blocky.IsRunning()).Should(BeFalse())
-				Expect(getContainerLogs(blocky)).
+				Expect(getContainerLogs(ctx, blocky)).
 					Should(ContainElement(ContainSubstring("no valid upstream for group default")))
 			})
 		})
 	})
 	Describe("'upstreams.timeout' parameter handling", func() {
-		var moka testcontainers.Container
-		BeforeEach(func() {
-			moka, err = createDNSMokkaContainer("moka1",
+		BeforeEach(func(ctx context.Context) {
+			_, err = createDNSMokkaContainer(ctx, "moka1",
 				`A example.com/NOERROR("A 1.2.3.4 123")`,
 				`A delay.com/delay(NOERROR("A 1.1.1.1 100"), "300ms")`)
-
 			Expect(err).Should(Succeed())
-			DeferCleanup(moka.Terminate)
 
-			blocky, err = createBlockyContainer(tmpDir,
+			blocky, err = createBlockyContainer(ctx, tmpDir,
 				"upstreams:",
 				"  groups:",
 				"    default:",
 				"      - moka1",
 				"  timeout: 200ms",
 			)
-
 			Expect(err).Should(Succeed())
-			DeferCleanup(blocky.Terminate)
 		})
-		It("should consider the timeout parameter", func() {
+		It("should consider the timeout parameter", func(ctx context.Context) {
 			By("query without timeout", func() {
 				msg := util.NewMsgWithQuestion("example.com.", A)
-				Expect(doDNSRequest(blocky, msg)).
+				Expect(doDNSRequest(ctx, blocky, msg)).
 					Should(
 						SatisfyAll(
 							BeDNSRecord("example.com.", A, "1.2.3.4"),
@@ -128,7 +123,7 @@ var _ = Describe("Upstream resolver configuration tests", func() {
 			By("query with timeout", func() {
 				msg := util.NewMsgWithQuestion("delay.com.", A)
 
-				resp, err := doDNSRequest(blocky, msg)
+				resp, err := doDNSRequest(ctx, blocky, msg)
 				Expect(err).Should(Succeed())
 				Expect(resp.Rcode).Should(Equal(dns.RcodeServerFailure))
 			})

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 
 	"github.com/0xERR0R/blocky/config"
 	"github.com/0xERR0R/blocky/log"
@@ -24,7 +25,7 @@ import (
 var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 	var (
 		sut       *Bootstrap
-		sutConfig *config.Config
+		sutConfig config.Config
 		ctx       context.Context
 		cancelFn  context.CancelFunc
 
@@ -32,8 +33,8 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 	)
 
 	BeforeEach(func() {
-		sutConfig = &config.Config{
-			BootstrapDNS: []config.BootstrappedUpstreamConfig{
+		sutConfig = config.Config{
+			BootstrapDNS: []config.BootstrappedUpstream{
 				{
 					Upstream: config.Upstream{
 						Net:  config.NetProtocolTcpTls,
@@ -50,31 +51,31 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 	})
 
 	JustBeforeEach(func() {
-		sut, err = NewBootstrap(ctx, sutConfig)
+		sut, err = NewBootstrap(ctx, &sutConfig)
 		Expect(err).Should(Succeed())
 	})
 
 	Describe("configuration", func() {
 		When("is not specified", func() {
 			BeforeEach(func() {
-				sutConfig = &config.Config{}
+				sutConfig.BootstrapDNS = config.BootstrapDNS{}
 			})
 
 			It("should use the system resolver", func() {
-				usedSystemResolver := make(chan bool, 100)
+				var usedSystemResolver atomic.Bool
 
 				sut.systemResolver = &net.Resolver{
 					PreferGo: true,
 					Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-						usedSystemResolver <- true
+						usedSystemResolver.Store(true)
 
 						return nil, errors.New("don't actually do anything")
 					},
 				}
 
 				_, err := sut.resolveUpstream(ctx, nil, "example.com")
-				Expect(err).ShouldNot(Succeed())
-				Expect(usedSystemResolver).Should(Receive(BeTrue()))
+				Expect(err).Should(HaveOccurred())
+				Expect(usedSystemResolver.Load()).Should(BeTrue())
 			})
 
 			Describe("HTTP transport", func() {
@@ -88,7 +89,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			When("one of multiple upstreams is invalid", func() {
 				It("errors", func() {
 					cfg := config.Config{
-						BootstrapDNS: []config.BootstrappedUpstreamConfig{
+						BootstrapDNS: []config.BootstrappedUpstream{
 							{
 								Upstream: config.Upstream{ // valid
 									Net:  config.NetProtocolTcpUdp,
@@ -105,7 +106,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 					}
 
 					_, err := NewBootstrap(ctx, &cfg)
-					Expect(err).ShouldNot(Succeed())
+					Expect(err).Should(HaveOccurred())
 				})
 			})
 		})
@@ -113,8 +114,8 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 		Context("using TCP UDP", func() {
 			When("hostname is an IP", func() {
 				BeforeEach(func() {
-					sutConfig = &config.Config{
-						BootstrapDNS: []config.BootstrappedUpstreamConfig{
+					sutConfig = config.Config{
+						BootstrapDNS: []config.BootstrappedUpstream{
 							{
 								Upstream: config.Upstream{
 									Net:  config.NetProtocolTcpUdp,
@@ -136,7 +137,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			When("using non IP hostname", func() {
 				It("errors", func() {
 					cfg := config.Config{
-						BootstrapDNS: []config.BootstrappedUpstreamConfig{
+						BootstrapDNS: []config.BootstrappedUpstream{
 							{
 								Upstream: config.Upstream{
 									Net:  config.NetProtocolTcpUdp,
@@ -147,15 +148,15 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 					}
 
 					_, err := NewBootstrap(ctx, &cfg)
-					Expect(err).ShouldNot(Succeed())
+					Expect(err).Should(HaveOccurred())
 					Expect(err.Error()).Should(ContainSubstring("must use IP instead of hostname"))
 				})
 			})
 
 			When("extra IPs are configured", func() {
 				BeforeEach(func() {
-					sutConfig = &config.Config{
-						BootstrapDNS: []config.BootstrappedUpstreamConfig{
+					sutConfig = config.Config{
+						BootstrapDNS: []config.BootstrappedUpstream{
 							{
 								Upstream: config.Upstream{
 									Net:  config.NetProtocolTcpUdp,
@@ -180,7 +181,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			When("IPs are missing", func() {
 				It("errors", func() {
 					cfg := config.Config{
-						BootstrapDNS: []config.BootstrappedUpstreamConfig{
+						BootstrapDNS: []config.BootstrappedUpstream{
 							{
 								Upstream: config.Upstream{
 									Net:  config.NetProtocolTcpTls,
@@ -191,7 +192,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 					}
 
 					_, err := NewBootstrap(ctx, &cfg)
-					Expect(err).ShouldNot(Succeed())
+					Expect(err).Should(HaveOccurred())
 					Expect(err.Error()).Should(ContainSubstring("no IPs configured"))
 				})
 			})
@@ -199,7 +200,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			When("hostname is IP", func() {
 				It("doesn't require extra IPs", func() {
 					cfg := config.Config{
-						BootstrapDNS: []config.BootstrappedUpstreamConfig{
+						BootstrapDNS: []config.BootstrappedUpstream{
 							{
 								Upstream: config.Upstream{
 									Net:  config.NetProtocolTcpTls,
@@ -222,7 +223,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 		BeforeEach(func() {
 			bootstrapUpstream = &mockResolver{}
 
-			sutConfig.BootstrapDNS = []config.BootstrappedUpstreamConfig{
+			sutConfig.BootstrapDNS = []config.BootstrappedUpstream{
 				{
 					Upstream: config.Upstream{
 						Net:  config.NetProtocolTcpTls,
@@ -285,7 +286,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				ips, err := sut.resolve(ctx, "localhost", []dns.Type{A})
 
-				Expect(err).ShouldNot(Succeed())
+				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring(resolveErr.Error()))
 				Expect(ips).Should(BeEmpty())
 			})
@@ -299,7 +300,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				ips, err := sut.resolve(ctx, "unknownhost.invalid", []dns.Type{A})
 
-				Expect(err).ShouldNot(Succeed())
+				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring("no such host"))
 				Expect(ips).Should(BeEmpty())
 			})
@@ -313,7 +314,6 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 				}
 
 				mockUpstreamServer := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-				DeferCleanup(mockUpstreamServer.Close)
 				upstream := mockUpstreamServer.Start()
 
 				upstreamIP := upstream.Host
@@ -334,6 +334,29 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 				Expect(mockUpstreamServer.GetCallCount()).Should(Equal(1))
 				Expect(rsp.Res.Question[0].Name).Should(Equal("example.com."))
 				Expect(rsp.Res.Id).ShouldNot(Equal(bootstrapResponse.Id))
+			})
+
+			Describe("Resolve", func() {
+				It("calls the usptream resolver", func(ctx context.Context) {
+					expected := new(model.Response)
+
+					bootstrapUpstream.On("Resolve", mock.Anything).Return(expected, nil)
+
+					Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
+						Should(BeIdenticalTo(expected))
+				})
+
+				When("using the system resolver", func() {
+					JustBeforeEach(func() {
+						sut = systemResolverBootstrap
+					})
+
+					It("can't resolve arbitrary requests", func(ctx context.Context) {
+						_, err := sut.Resolve(ctx, newRequest("example.com.", A))
+						Expect(err).
+							Should(MatchError(errArbitrarySystemResolverRequest))
+					})
+				})
 			})
 		})
 
@@ -374,7 +397,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 				// implicit expectation of 0 bootstrapUpstream.Resolve calls
 
 				_, err = t.DialContext(ctx, "ip", "!bad-addr!")
-				Expect(err).ShouldNot(Succeed())
+				Expect(err).Should(HaveOccurred())
 			})
 
 			It("returns upstream errors", func() {
@@ -386,7 +409,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				_, err = t.DialContext(ctx, "ip", "abc:123")
 
-				Expect(err).ShouldNot(Succeed())
+				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring(resolveErr.Error()))
 			})
 
@@ -399,7 +422,7 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 				_, err = t.DialContext(ctx, "ip", "abc:123")
 
-				Expect(err).ShouldNot(Succeed())
+				Expect(err).Should(HaveOccurred())
 				Expect(err.Error()).Should(ContainSubstring("no such host"))
 			})
 		})
@@ -571,12 +594,9 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 
 		BeforeEach(func() {
 			mockUpstream1 = NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-			DeferCleanup(mockUpstream1.Close)
-
 			mockUpstream2 = NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-			DeferCleanup(mockUpstream1.Close)
 
-			sutConfig.BootstrapDNS = []config.BootstrappedUpstreamConfig{
+			sutConfig.BootstrapDNS = []config.BootstrappedUpstream{
 				{Upstream: mockUpstream1.Start()},
 				{Upstream: mockUpstream2.Start()},
 			}

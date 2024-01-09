@@ -15,13 +15,11 @@ var _ = Describe("Hostname function tests", func() {
 
 		BeforeEach(func() {
 			tmpDir = helpertest.NewTmpFolder("hostname")
-			Expect(tmpDir.Error).Should(Succeed())
-			DeferCleanup(tmpDir.Clean)
 		})
 
 		It("should be used", func() {
 			tmpFile := tmpDir.CreateStringFile("filetest1", "TestName ")
-			Expect(tmpFile.Error).Should(Succeed())
+
 			getHostname(tmpFile.Path)
 
 			fhn, err := os.ReadFile(tmpFile.Path)

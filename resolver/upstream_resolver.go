@@ -24,9 +24,8 @@ import (
 )
 
 const (
-	dnsContentType             = "application/dns-message"
-	defaultTLSHandshakeTimeout = 5 * time.Second
-	retryAttempts              = 3
+	dnsContentType = "application/dns-message"
+	retryAttempts  = 3
 )
 
 type upstreamConfig struct {
@@ -94,9 +93,8 @@ func createUpstreamClient(cfg upstreamConfig) upstreamClient {
 			userAgent: cfg.UserAgent,
 			client: &http.Client{
 				Transport: &http.Transport{
-					TLSClientConfig:     &tlsConfig,
-					TLSHandshakeTimeout: defaultTLSHandshakeTimeout,
-					ForceAttemptHTTP2:   true,
+					TLSClientConfig:   &tlsConfig,
+					ForceAttemptHTTP2: true,
 				},
 			},
 			host: cfg.Host,
@@ -190,24 +188,71 @@ func (r *dnsUpstreamClient) fmtURL(ip net.IP, port uint16, _ string) string {
 func (r *dnsUpstreamClient) callExternal(
 	ctx context.Context, msg *dns.Msg, upstreamURL string, protocol model.RequestProtocol,
 ) (response *dns.Msg, rtt time.Duration, err error) {
-	if protocol == model.RequestProtocolTCP {
-		response, rtt, err = r.tcpClient.ExchangeContext(ctx, msg, upstreamURL)
-		if err != nil && r.udpClient != nil {
-			// try UDP as fallback
-			var opErr *net.OpError
-			if errors.As(err, &opErr) && opErr.Op == "dial" {
-				return r.udpClient.ExchangeContext(ctx, msg, upstreamURL)
-			}
+	if r.udpClient == nil {
+		return r.tcpClient.ExchangeContext(ctx, msg, upstreamURL)
+	}
+
+	return r.raceClients(ctx, msg, upstreamURL, protocol)
+}
+
+func (r *dnsUpstreamClient) raceClients(
+	ctx context.Context, msg *dns.Msg, upstreamURL string, protocol model.RequestProtocol,
+) (response *dns.Msg, rtt time.Duration, err error) {
+	type result struct {
+		proto model.RequestProtocol
+		msg   *dns.Msg
+		rtt   time.Duration
+		err   error
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// We don't explicitly close the channel, but since the buffer is big enough for all goroutines,
+	// it will be GC'ed and closed automatically.
+	ch := make(chan result, 2) //nolint:gomnd // TCP and UDP
+
+	exchange := func(client *dns.Client, proto model.RequestProtocol) {
+		msg, rtt, err := client.ExchangeContext(ctx, msg, upstreamURL)
+
+		ch <- result{proto, msg, rtt, err}
+	}
+
+	go exchange(r.tcpClient, model.RequestProtocolTCP)
+	go exchange(r.udpClient, model.RequestProtocolUDP)
+
+	// We don't care about a response too big for the downstream protocol: that's handled by `Server`,
+	// and returning a larger request from here might allow us to cache it.
+
+	res1 := <-ch
+	if res1.err == nil && !res1.msg.Truncated {
+		return res1.msg, res1.rtt, nil
+	}
+
+	res2 := <-ch
+	if res2.err == nil && !res2.msg.Truncated {
+		return res2.msg, res2.rtt, nil
+	}
+
+	resWhere := func(pred func(*result) bool) *result {
+		if pred(&res1) {
+			return &res1
 		}
 
-		return response, rtt, err
+		return &res2
 	}
 
-	if r.udpClient != nil {
-		return r.udpClient.ExchangeContext(ctx, msg, upstreamURL)
+	// When both failed, return the result that used the same protocol as the downstream request
+	if res1.err != nil && res2.err != nil {
+		sameProto := resWhere(func(r *result) bool { return r.proto == protocol })
+
+		return sameProto.msg, sameProto.rtt, sameProto.err
 	}
 
-	return r.tcpClient.ExchangeContext(ctx, msg, upstreamURL)
+	// Only a single one failed, use the one that succeeded
+	successful := resWhere(func(r *result) bool { return r.err == nil })
+
+	return successful.msg, successful.rtt, nil
 }
 
 // NewUpstreamResolver creates new resolver instance
@@ -216,11 +261,13 @@ func NewUpstreamResolver(
 ) (*UpstreamResolver, error) {
 	r := newUpstreamResolverUnchecked(cfg, bootstrap)
 
-	if cfg.StartVerify {
-		_, err := r.bootstrap.UpstreamIPs(ctx, r)
-		if err != nil {
-			return nil, err
-		}
+	onErr := func(err error) {
+		r.log().WithError(err).Warn("initial resolver test failed")
+	}
+
+	err := cfg.Init.Strategy.Do(ctx, r.testResolve, onErr)
+	if err != nil {
+		return nil, err
 	}
 
 	return r, nil
@@ -241,6 +288,10 @@ func newUpstreamResolverUnchecked(cfg upstreamConfig, bootstrap *Bootstrap) *Ups
 
 func (r UpstreamResolver) String() string {
 	return fmt.Sprintf("%s '%s'", r.Type(), r.cfg)
+}
+
+func (r UpstreamResolver) Upstream() config.Upstream {
+	return r.cfg.Upstream
 }
 
 func (r *UpstreamResolver) log() *logrus.Entry {
@@ -274,14 +325,8 @@ func (r *UpstreamResolver) Resolve(ctx context.Context, request *model.Request) 
 			ip = ips.Current()
 			upstreamURL := r.upstreamClient.fmtURL(ip, r.cfg.Port, r.cfg.Path)
 
-			ctx := ctx // make sure we don't overwrite the outer function's context
-
-			if r.cfg.Timeout.IsAboveZero() {
-				var cancel context.CancelFunc
-
-				ctx, cancel = context.WithTimeout(ctx, r.cfg.Timeout.ToDuration())
-				defer cancel()
-			}
+			ctx, cancel := context.WithTimeout(ctx, r.cfg.Timeout.ToDuration())
+			defer cancel()
 
 			response, rtt, err := r.upstreamClient.callExternal(ctx, request.Req, upstreamURL, request.Protocol)
 			if err != nil {

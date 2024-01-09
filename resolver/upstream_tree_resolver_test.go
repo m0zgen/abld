@@ -132,9 +132,9 @@ var _ = Describe("UpstreamTreeResolver", Label("upstreamTreeResolver"), func() {
 			})
 		})
 
-		When("start verify is enabled", func() {
+		When("init strategy is failOnError", func() {
 			BeforeEach(func() {
-				sutConfig.StartVerify = true
+				sutConfig.Init.Strategy = config.InitStrategyFailOnError
 			})
 
 			It("should fail", func() {
@@ -164,8 +164,6 @@ var _ = Describe("UpstreamTreeResolver", Label("upstreamTreeResolver"), func() {
 
 					server := NewMockUDPUpstreamServer().WithAnswerRR(fmt.Sprintf("example.com 123 IN A %s", ip))
 					sutConfig.Groups[group] = []config.Upstream{server.Start()}
-
-					DeferCleanup(server.Close)
 				}
 			})
 

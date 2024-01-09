@@ -28,21 +28,13 @@ var (
 
 var _ = BeforeSuite(func() {
 	tmpDir = NewTmpFolder("BlockingResolver")
-	Expect(tmpDir.Error).Should(Succeed())
-	DeferCleanup(tmpDir.Clean)
-
 	group1File = tmpDir.CreateStringFile("group1File", "DOMAIN1.com")
-	Expect(group1File.Error).Should(Succeed())
-
 	group2File = tmpDir.CreateStringFile("group2File", "blocked2.com")
-	Expect(group2File.Error).Should(Succeed())
-
 	defaultGroupFile = tmpDir.CreateStringFile("defaultGroupFile",
 		"blocked3.com",
 		"123.145.123.145",
 		"2001:db8:85a3:08d3::370:7344",
 		"badcnamedomain.com")
-	Expect(defaultGroupFile.Error).Should(Succeed())
 })
 
 var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
@@ -167,7 +159,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 		})
 	})
 
-	Describe("Blocking with fast start strategy", func() {
+	Describe("Blocking with fast init strategy", func() {
 		BeforeEach(func() {
 			sutConfig = config.Blocking{
 				BlockType: "ZEROIP",
@@ -178,7 +170,9 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 				ClientGroupsBlock: map[string][]string{
 					"default": {"gr1"},
 				},
-				Loading: config.SourceLoadingConfig{Strategy: config.StartStrategyTypeFast},
+				Loading: config.SourceLoading{
+					Init: config.Init{Strategy: config.InitStrategyFast},
+				},
 			}
 		})
 
@@ -842,7 +836,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 				})
 
 				By("Calling Rest API to deactivate all groups", func() {
-					err := sut.DisableBlocking(0, []string{})
+					err := sut.DisableBlocking(context.TODO(), 0, []string{})
 					Expect(err).Should(Succeed())
 				})
 
@@ -875,7 +869,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 				})
 
 				By("Calling Rest API to deactivate only defaultGroup", func() {
-					err := sut.DisableBlocking(0, []string{"defaultGroup"})
+					err := sut.DisableBlocking(context.TODO(), 0, []string{"defaultGroup"})
 					Expect(err).Should(Succeed())
 				})
 
@@ -935,7 +929,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 						enabled <- state
 					})
 					Expect(err).Should(Succeed())
-					err = sut.DisableBlocking(500*time.Millisecond, []string{})
+					err = sut.DisableBlocking(context.TODO(), 500*time.Millisecond, []string{})
 					Expect(err).Should(Succeed())
 					Eventually(enabled, "1s").Should(Receive(BeFalse()))
 				})
@@ -1025,7 +1019,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 						enabled <- false
 					})
 					Expect(err).Should(Succeed())
-					err = sut.DisableBlocking(500*time.Millisecond, []string{"group1"})
+					err = sut.DisableBlocking(context.TODO(), 500*time.Millisecond, []string{"group1"})
 					Expect(err).Should(Succeed())
 					Eventually(enabled, "1s").Should(Receive(BeFalse()))
 				})
@@ -1086,7 +1080,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 
 		When("Disable blocking is called with wrong group name", func() {
 			It("should fail", func() {
-				err := sut.DisableBlocking(500*time.Millisecond, []string{"unknownGroupName"})
+				err := sut.DisableBlocking(context.TODO(), 500*time.Millisecond, []string{"unknownGroupName"})
 				Expect(err).Should(HaveOccurred())
 			})
 		})
@@ -1094,7 +1088,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 		When("Blocking status is called", func() {
 			It("should return correct status", func() {
 				By("enable blocking via API", func() {
-					sut.EnableBlocking()
+					sut.EnableBlocking(context.TODO())
 				})
 
 				By("Query blocking status via API should return 'enabled'", func() {
@@ -1103,7 +1097,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 				})
 
 				By("disable blocking via API", func() {
-					err := sut.DisableBlocking(500*time.Millisecond, []string{})
+					err := sut.DisableBlocking(context.TODO(), 500*time.Millisecond, []string{})
 					Expect(err).Should(Succeed())
 				})
 
@@ -1132,8 +1126,10 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 				_, err := NewBlockingResolver(ctx, config.Blocking{
 					BlackLists: map[string][]config.BytesSource{"gr1": config.NewBytesSources("wrongPath")},
 					WhiteLists: map[string][]config.BytesSource{"whitelist": config.NewBytesSources("wrongPath")},
-					Loading:    config.SourceLoadingConfig{Strategy: config.StartStrategyTypeFailOnError},
-					BlockType:  "zeroIp",
+					Loading: config.SourceLoading{
+						Init: config.Init{Strategy: config.InitStrategyFailOnError},
+					},
+					BlockType: "zeroIp",
 				}, nil, systemResolverBootstrap)
 				Expect(err).Should(HaveOccurred())
 			})
@@ -1149,12 +1145,12 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 
 			Expect(err).Should(Succeed())
 
-			var rcfg config.RedisConfig
+			var rcfg config.Redis
 			err = defaults.Set(&rcfg)
 
 			Expect(err).Should(Succeed())
 			rcfg.Address = redisServer.Addr()
-			redisClient, err = redis.New(&rcfg)
+			redisClient, err = redis.New(context.TODO(), &rcfg)
 
 			Expect(err).Should(Succeed())
 			Expect(redisClient).ShouldNot(BeNil())
@@ -1171,7 +1167,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 		})
 		When("disable", func() {
 			It("should return disable", func() {
-				sut.EnableBlocking()
+				sut.EnableBlocking(context.TODO())
 
 				redisMockMsg := &redis.EnabledMessage{
 					State: false,
@@ -1185,7 +1181,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 		})
 		When("disable", func() {
 			It("should return disable", func() {
-				sut.EnableBlocking()
+				sut.EnableBlocking(context.TODO())
 				redisMockMsg := &redis.EnabledMessage{
 					State:  false,
 					Groups: []string{"unknown"},
@@ -1199,7 +1195,7 @@ var _ = Describe("BlockingResolver", Label("blockingResolver"), func() {
 		})
 		When("enable", func() {
 			It("should return enable", func() {
-				err = sut.DisableBlocking(time.Hour, []string{})
+				err = sut.DisableBlocking(context.TODO(), time.Hour, []string{})
 				Expect(err).Should(Succeed())
 
 				redisMockMsg := &redis.EnabledMessage{

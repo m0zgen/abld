@@ -161,10 +161,15 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 				BeforeEach(func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerRR("25.178.168.192.in-addr.arpa. 600 IN PTR host1")
-					DeferCleanup(testUpstream.Close)
+
 					sutConfig = config.ClientLookup{
 						Upstream: testUpstream.Start(),
 					}
+				})
+
+				JustBeforeEach(func() {
+					// Don't count the resolver test
+					testUpstream.ResetCallCount()
 				})
 
 				It("should resolve client name", func() {
@@ -209,6 +214,7 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 
 						// no cache -> call count 2
 						Expect(request.ClientNames).Should(ConsistOf("host1"))
+						Expect(testUpstream.GetCallCount()).Should(Equal(2))
 					})
 				})
 			})
@@ -217,10 +223,15 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 				BeforeEach(func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerRR("25.178.168.192.in-addr.arpa. 600 IN PTR myhost1", "25.178.168.192.in-addr.arpa. 600 IN PTR myhost2")
-					DeferCleanup(testUpstream.Close)
+
 					sutConfig = config.ClientLookup{
 						Upstream: testUpstream.Start(),
 					}
+				})
+
+				JustBeforeEach(func() {
+					// Don't count the resolver test
+					testUpstream.ResetCallCount()
 				})
 
 				It("should resolve all client names", func() {
@@ -247,8 +258,13 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 				BeforeEach(func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerRR("25.178.168.192.in-addr.arpa. 600 IN PTR host1")
-					DeferCleanup(testUpstream.Close)
+
 					sutConfig.Upstream = testUpstream.Start()
+				})
+
+				JustBeforeEach(func() {
+					// Don't count the resolver test
+					testUpstream.ResetCallCount()
 				})
 
 				It("should resolve client name", func() {
@@ -268,8 +284,13 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 				BeforeEach(func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerRR("25.178.168.192.in-addr.arpa. 600 IN PTR myhost1", "25.178.168.192.in-addr.arpa. 600 IN PTR myhost2")
-					DeferCleanup(testUpstream.Close)
+
 					sutConfig.Upstream = testUpstream.Start()
+				})
+
+				JustBeforeEach(func() {
+					// Don't count the resolver test
+					testUpstream.ResetCallCount()
 				})
 
 				It("should resolve the client name depending to defined order", func() {
@@ -292,10 +313,15 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 				BeforeEach(func() {
 					testUpstream = NewMockUDPUpstreamServer().
 						WithAnswerError(dns.RcodeNameError)
-					DeferCleanup(testUpstream.Close)
+
 					sutConfig = config.ClientLookup{
 						Upstream: testUpstream.Start(),
 					}
+				})
+
+				JustBeforeEach(func() {
+					// Don't count the resolver test
+					testUpstream.ResetCallCount()
 				})
 
 				It("should use fallback for client name", func() {
@@ -371,13 +397,13 @@ var _ = Describe("ClientResolver", Label("clientNamesResolver"), func() {
 				b := newTestBootstrap(ctx, &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeServerFailure}})
 
 				upstreamsCfg := defaultUpstreamsConfig
-				upstreamsCfg.StartVerify = true
+				upstreamsCfg.Init.Strategy = config.InitStrategyFailOnError
 
 				r, err := NewClientNamesResolver(ctx, config.ClientLookup{
 					Upstream: config.Upstream{Host: "example.com"},
 				}, upstreamsCfg, b)
 
-				Expect(err).ShouldNot(Succeed())
+				Expect(err).Should(HaveOccurred())
 				Expect(r).Should(BeNil())
 			})
 		})

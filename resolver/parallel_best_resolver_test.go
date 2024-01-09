@@ -3,7 +3,6 @@ package resolver
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/0xERR0R/blocky/config"
 	. "github.com/0xERR0R/blocky/helpertest"
@@ -15,20 +14,14 @@ import (
 )
 
 var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
-	const (
-		timeout = 50 * time.Millisecond
-
-		verifyUpstreams   = true
-		noVerifyUpstreams = false
-	)
-
 	var (
-		sut         *ParallelBestResolver
-		sutStrategy config.UpstreamStrategy
-		upstreams   []config.Upstream
-		sutVerify   bool
-		ctx         context.Context
-		cancelFn    context.CancelFunc
+		sut             *ParallelBestResolver
+		sutStrategy     config.UpstreamStrategy
+		sutInitStrategy config.InitStrategy
+		upstreams       []config.Upstream
+
+		ctx      context.Context
+		cancelFn context.CancelFunc
 
 		err error
 
@@ -47,17 +40,19 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 
 		upstreams = []config.Upstream{{Host: "wrong"}, {Host: "127.0.0.2"}}
 
+		sutInitStrategy = config.InitStrategyBlocking
 		sutStrategy = config.UpstreamStrategyParallelBest
-		sutVerify = noVerifyUpstreams
 
 		bootstrap = systemResolverBootstrap
 	})
 
 	JustBeforeEach(func() {
 		upstreamsCfg := config.Upstreams{
-			StartVerify: sutVerify,
-			Strategy:    sutStrategy,
-			Timeout:     config.Duration(timeout),
+			Init: config.Init{
+				Strategy: sutInitStrategy,
+			},
+			Strategy: sutStrategy,
+			Timeout:  config.Duration(timeout),
 		}
 
 		sutConfig := config.NewUpstreamGroup("test", upstreamsCfg, upstreams)
@@ -93,9 +88,31 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 			upstreams = []config.Upstream{}
 		})
 
-		It("should fail on startup", func() {
-			Expect(err).Should(HaveOccurred())
-			Expect(err).Should(MatchError(ContainSubstring("no external DNS resolvers configured")))
+		When("using InitStrategyFailOnError", func() {
+			BeforeEach(func() {
+				sutInitStrategy = config.InitStrategyFailOnError
+			})
+			It("should fail to start", func() {
+				Expect(err).Should(HaveOccurred())
+			})
+		})
+
+		When("using InitStrategyBlocking", func() {
+			BeforeEach(func() {
+				sutInitStrategy = config.InitStrategyBlocking
+			})
+			It("should start", func() {
+				Expect(err).Should(Succeed())
+			})
+		})
+
+		When("using InitStrategyFast", func() {
+			BeforeEach(func() {
+				sutInitStrategy = config.InitStrategyFast
+			})
+			It("should start", func() {
+				Expect(err).Should(Succeed())
+			})
 		})
 	})
 
@@ -106,21 +123,30 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 			upstreams = []config.Upstream{{Host: "wrong"}, {Host: "127.0.0.2"}}
 		})
 
-		When("strict checking is enabled", func() {
+		When("using InitStrategyFailOnError", func() {
 			BeforeEach(func() {
-				sutVerify = verifyUpstreams
+				sutInitStrategy = config.InitStrategyFailOnError
 			})
 			It("should fail to start", func() {
 				Expect(err).Should(HaveOccurred())
 			})
 		})
 
-		When("strict checking is disabled", func() {
+		When("using InitStrategyBlocking", func() {
 			BeforeEach(func() {
-				sutVerify = noVerifyUpstreams
+				sutInitStrategy = config.InitStrategyBlocking
 			})
 			It("should start", func() {
-				Expect(err).Should(Not(HaveOccurred()))
+				Expect(err).Should(Succeed())
+			})
+		})
+
+		When("using InitStrategyFast", func() {
+			BeforeEach(func() {
+				sutInitStrategy = config.InitStrategyFast
+			})
+			It("should start", func() {
+				Expect(err).Should(Succeed())
 			})
 		})
 	})
@@ -130,23 +156,22 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 			timeoutUpstream := NewMockUDPUpstreamServer().
 				WithAnswerRR("example.com 123 IN A 123.124.122.1").
 				WithDelay(2 * timeout)
-			DeferCleanup(timeoutUpstream.Close)
 
 			upstreams = []config.Upstream{timeoutUpstream.Start()}
 		})
 
-		When("strict checking is enabled", func() {
+		When("using InitStrategyFailOnError", func() {
 			BeforeEach(func() {
-				sutVerify = verifyUpstreams
+				sutInitStrategy = config.InitStrategyFailOnError
 			})
 			It("should fail to start", func() {
 				Expect(err).Should(HaveOccurred())
 			})
 		})
 
-		When("strict checking is disabled", func() {
+		When("using InitStrategyBlocking", func() {
 			BeforeEach(func() {
-				sutVerify = noVerifyUpstreams
+				sutInitStrategy = config.InitStrategyBlocking
 			})
 			It("should start", func() {
 				Expect(err).Should(Succeed())
@@ -160,6 +185,27 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 				Expect(isTimeout(err)).Should(BeTrue())
 			})
 		})
+
+		When("using InitStrategyFast", func() {
+			BeforeEach(func() {
+				sutInitStrategy = config.InitStrategyFast
+			})
+			It("should start", func() {
+				Expect(err).Should(Succeed())
+			})
+			It("should not resolve", func() {
+				Expect(err).Should(Succeed())
+
+				request := newRequest("example.com.", A)
+				_, err := sut.Resolve(ctx, request)
+				Expect(err).Should(HaveOccurred())
+				Expect(err).Should(SatisfyAny(
+					// The actual error depends on if the init has completed or not
+					MatchError(isTimeout, "isTimeout"),
+					MatchError(errArbitrarySystemResolverRequest),
+				))
+			})
+		})
 	})
 
 	Describe("Resolving result from fastest upstream resolver", func() {
@@ -167,12 +213,10 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 			When("one resolver is fast and another is slow", func() {
 				BeforeEach(func() {
 					fastTestUpstream := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-					DeferCleanup(fastTestUpstream.Close)
 
 					slowTestUpstream := NewMockUDPUpstreamServer().
 						WithAnswerRR("example.com 123 IN A 123.124.122.123").
 						WithDelay(timeout / 2)
-					DeferCleanup(slowTestUpstream.Close)
 
 					upstreams = []config.Upstream{fastTestUpstream.Start(), slowTestUpstream.Start()}
 				})
@@ -194,9 +238,7 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 					slowTestUpstream = NewMockUDPUpstreamServer().
 						WithAnswerRR("example.com 123 IN A 123.124.122.123").
 						WithDelay(timeout / 2)
-					DeferCleanup(slowTestUpstream.Close)
 					upstreams = []config.Upstream{{Host: "wrong"}, slowTestUpstream.Start()}
-					Expect(err).Should(Succeed())
 				})
 				It("Should use result from successful resolver", func() {
 					request := newRequest("example.com.", A)
@@ -229,7 +271,6 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 		When("only 1 upstream resolvers is defined", func() {
 			BeforeEach(func() {
 				mockUpstream := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-				DeferCleanup(mockUpstream.Close)
 
 				upstreams = []config.Upstream{mockUpstream.Start()}
 			})
@@ -255,10 +296,7 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 				withError2 := config.Upstream{Host: "wrong2"}
 
 				mockUpstream1 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-				DeferCleanup(mockUpstream1.Close)
-
 				mockUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-				DeferCleanup(mockUpstream2.Close)
 
 				upstreams = []config.Upstream{withError1, mockUpstream1.Start(), mockUpstream2.Start(), withError2}
 			})
@@ -268,7 +306,7 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 					resolverCount := make(map[Resolver]int)
 
 					for i := 0; i < 1000; i++ {
-						resolvers := pickRandom(sut.resolvers, parallelBestResolverCount)
+						resolvers := pickRandom(*sut.resolvers.Load(), parallelBestResolverCount)
 						res1 := resolvers[0].resolver
 						res2 := resolvers[1].resolver
 						Expect(res1).ShouldNot(Equal(res2))
@@ -292,7 +330,7 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 					resolverCount := make(map[*UpstreamResolver]int)
 
 					for i := 0; i < 100; i++ {
-						resolvers := pickRandom(sut.resolvers, parallelBestResolverCount)
+						resolvers := pickRandom(*sut.resolvers.Load(), parallelBestResolverCount)
 						res1 := resolvers[0].resolver.(*UpstreamResolver)
 						res2 := resolvers[1].resolver.(*UpstreamResolver)
 						Expect(res1).ShouldNot(Equal(res2))
@@ -319,12 +357,12 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 			b := newTestBootstrap(ctx, &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeServerFailure}})
 
 			upstreamsCfg := sut.cfg.Upstreams
-			upstreamsCfg.StartVerify = true
+			upstreamsCfg.Init.Strategy = config.InitStrategyFailOnError
 
 			group := config.NewUpstreamGroup("test", upstreamsCfg, []config.Upstream{{Host: "example.com"}})
 
 			r, err := NewParallelBestResolver(ctx, group, b)
-			Expect(err).ShouldNot(Succeed())
+			Expect(err).Should(HaveOccurred())
 			Expect(r).Should(BeNil())
 		})
 	})
@@ -347,10 +385,7 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 					When("Both respond in time", func() {
 						BeforeEach(func() {
 							testUpstream1 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-							DeferCleanup(testUpstream1.Close)
-
 							testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.123")
-							DeferCleanup(testUpstream2.Close)
 
 							upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 						})
@@ -373,10 +408,8 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 							timeoutUpstream := NewMockUDPUpstreamServer().
 								WithAnswerRR("example.com 123 IN A 123.124.122.1").
 								WithDelay(2 * timeout)
-							DeferCleanup(timeoutUpstream.Close)
 
 							testUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.2")
-							DeferCleanup(testUpstream2.Close)
 
 							upstreams = []config.Upstream{timeoutUpstream.Start(), testUpstream2.Start()}
 						})
@@ -396,12 +429,10 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 							testUpstream1 := NewMockUDPUpstreamServer().
 								WithAnswerRR("example.com 123 IN A 123.124.122.1").
 								WithDelay(2 * timeout)
-							DeferCleanup(testUpstream1.Close)
 
 							testUpstream2 := NewMockUDPUpstreamServer().
 								WithAnswerRR("example.com 123 IN A 123.124.122.2").
 								WithDelay(2 * timeout)
-							DeferCleanup(testUpstream2.Close)
 
 							upstreams = []config.Upstream{testUpstream1.Start(), testUpstream2.Start()}
 						})
@@ -431,7 +462,6 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 			When("only 1 upstream resolvers is defined", func() {
 				BeforeEach(func() {
 					mockUpstream := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-					DeferCleanup(mockUpstream.Close)
 
 					upstreams = []config.Upstream{mockUpstream.Start()}
 				})
@@ -457,10 +487,8 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 					withError2 := config.Upstream{Host: "wrong2"}
 
 					mockUpstream1 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-					DeferCleanup(mockUpstream1.Close)
 
 					mockUpstream2 := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")
-					DeferCleanup(mockUpstream2.Close)
 
 					upstreams = []config.Upstream{withError1, mockUpstream1.Start(), mockUpstream2.Start(), withError2}
 				})
@@ -470,7 +498,7 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 						resolverCount := make(map[Resolver]int)
 
 						for i := 0; i < 2000; i++ {
-							r := weightedRandom(sut.resolvers, nil)
+							r := weightedRandom(*sut.resolvers.Load(), nil)
 							resolverCount[r.resolver]++
 						}
 						for _, v := range resolverCount {
@@ -489,7 +517,7 @@ var _ = Describe("ParallelBestResolver", Label("parallelBestResolver"), func() {
 						resolverCount := make(map[*UpstreamResolver]int)
 
 						for i := 0; i < 200; i++ {
-							r := weightedRandom(sut.resolvers, nil)
+							r := weightedRandom(*sut.resolvers.Load(), nil)
 							res := r.resolver.(*UpstreamResolver)
 
 							resolverCount[res]++

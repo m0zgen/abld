@@ -9,6 +9,7 @@ import (
 	"github.com/0xERR0R/blocky/config"
 	"github.com/0xERR0R/blocky/util"
 	"github.com/miekg/dns"
+	"github.com/onsi/ginkgo/v2"
 )
 
 type MockUDPUpstreamServer struct {
@@ -18,7 +19,11 @@ type MockUDPUpstreamServer struct {
 }
 
 func NewMockUDPUpstreamServer() *MockUDPUpstreamServer {
-	return &MockUDPUpstreamServer{}
+	srv := &MockUDPUpstreamServer{}
+
+	ginkgo.DeferCleanup(srv.Close)
+
+	return srv
 }
 
 func (t *MockUDPUpstreamServer) WithAnswerRR(answers ...string) *MockUDPUpstreamServer {
@@ -80,6 +85,10 @@ func (t *MockUDPUpstreamServer) WithDelay(delay time.Duration) *MockUDPUpstreamS
 
 func (t *MockUDPUpstreamServer) GetCallCount() int {
 	return int(atomic.LoadInt32(&t.callCount))
+}
+
+func (t *MockUDPUpstreamServer) ResetCallCount() {
+	atomic.StoreInt32(&t.callCount, 0)
 }
 
 func (t *MockUDPUpstreamServer) Close() {

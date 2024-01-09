@@ -21,7 +21,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
@@ -41,7 +41,7 @@ jobs:
           args: build --clean --snapshot
 
       - name: Upload dist folder
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: dist_folder
           path: dist
@@ -94,7 +94,7 @@ jobs:
     steps:
       - name: Download dist folder
         id: download
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: dist_folder
 

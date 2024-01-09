@@ -135,9 +135,12 @@ func NewServer(ctx context.Context, cfg *config.Config) (server *Server, err err
 		return nil, err
 	}
 
-	redisClient, redisErr := redis.New(&cfg.Redis)
-	if redisErr != nil && cfg.Redis.Required {
-		return nil, redisErr
+	var redisClient *redis.Client
+	if cfg.Redis.IsEnabled() {
+		redisClient, err = redis.New(ctx, &cfg.Redis)
+		if err != nil && cfg.Redis.Required {
+			return nil, err
+		}
 	}
 
 	queryResolver, queryError := createQueryResolver(ctx, cfg, bootstrap, redisClient)
@@ -158,7 +161,7 @@ func NewServer(ctx context.Context, cfg *config.Config) (server *Server, err err
 
 	server.printConfiguration()
 
-	server.registerDNSHandlers()
+	server.registerDNSHandlers(ctx)
 	err = server.registerAPIEndpoints(httpRouter)
 
 	if err != nil {
@@ -412,16 +415,25 @@ func createQueryResolver(
 	return r, nil
 }
 
-func (s *Server) registerDNSHandlers() {
+func (s *Server) registerDNSHandlers(ctx context.Context) {
+	wrappedOnRequest := func(w dns.ResponseWriter, request *dns.Msg) {
+		s.OnRequest(ctx, w, request)
+	}
+
 	for _, server := range s.dnsServers {
 		handler := server.Handler.(*dns.ServeMux)
-		handler.HandleFunc(".", s.OnRequest)
+		handler.HandleFunc(".", wrappedOnRequest)
 		handler.HandleFunc("healthcheck.blocky", s.OnHealthCheck)
 	}
 }
 
 func (s *Server) printConfiguration() {
 	logger().Info("current configuration:")
+
+	if s.cfg.Redis.IsEnabled() {
+		logger().Info("Redis:")
+		log.WithIndent(logger(), "  ", s.cfg.Redis.LogConfig)
+	}
 
 	resolver.ForEach(s.queryResolver, func(res resolver.Resolver) {
 		resolver.LogResolverConfig(res, logger())
@@ -526,11 +538,11 @@ func (s *Server) Start(ctx context.Context, errCh chan<- error) {
 }
 
 // Stop stops the server
-func (s *Server) Stop() error {
+func (s *Server) Stop(ctx context.Context) error {
 	logger().Info("Stopping server")
 
 	for _, server := range s.dnsServers {
-		if err := server.Shutdown(); err != nil {
+		if err := server.ShutdownContext(ctx); err != nil {
 			return fmt.Errorf("stop %s listener failed: %w", server.Net, err)
 		}
 	}
@@ -583,12 +595,12 @@ func newRequest(clientIP net.IP, protocol model.RequestProtocol,
 }
 
 // OnRequest will be executed if a new DNS request is received
-func (s *Server) OnRequest(w dns.ResponseWriter, request *dns.Msg) {
+func (s *Server) OnRequest(ctx context.Context, w dns.ResponseWriter, request *dns.Msg) {
 	logger().Debug("new request")
 
 	r := createResolverRequest(w, request)
 
-	response, err := s.queryResolver.Resolve(context.Background(), r)
+	response, err := s.queryResolver.Resolve(ctx, r)
 
 	if err != nil {
 		logger().Error("error on processing request:", err)
@@ -601,7 +613,7 @@ func (s *Server) OnRequest(w dns.ResponseWriter, request *dns.Msg) {
 		response.Res.MsgHdr.RecursionAvailable = request.MsgHdr.RecursionDesired
 
 		// truncate if necessary
-		response.Res.Truncate(getMaxResponseSize(w.LocalAddr().Network(), request))
+		response.Res.Truncate(getMaxResponseSize(r))
 
 		// enable compression
 		response.Res.Compress = true
@@ -612,13 +624,13 @@ func (s *Server) OnRequest(w dns.ResponseWriter, request *dns.Msg) {
 }
 
 // returns EDNS UDP size or if not present, 512 for UDP and 64K for TCP
-func getMaxResponseSize(network string, request *dns.Msg) int {
-	edns := request.IsEdns0()
+func getMaxResponseSize(req *model.Request) int {
+	edns := req.Req.IsEdns0()
 	if edns != nil && edns.UDPSize() > 0 {
 		return int(edns.UDPSize())
 	}
 
-	if network == "tcp" {
+	if req.Protocol == model.RequestProtocolTCP {
 		return dns.MaxMsgSize
 	}
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/0xERR0R/blocky/log"
 	"github.com/sirupsen/logrus"
 )
 
@@ -8,14 +9,23 @@ const UpstreamDefaultCfgName = "default"
 
 // Upstreams upstream servers configuration
 type Upstreams struct {
-	Timeout     Duration         `yaml:"timeout" default:"2s"`
-	Groups      UpstreamGroups   `yaml:"groups"`
-	Strategy    UpstreamStrategy `yaml:"strategy" default:"parallel_best"`
-	StartVerify bool             `yaml:"startVerify" default:"false"`
-	UserAgent   string           `yaml:"userAgent"`
+	Init      Init             `yaml:"init"`
+	Timeout   Duration         `yaml:"timeout" default:"2s"` // always > 0
+	Groups    UpstreamGroups   `yaml:"groups"`
+	Strategy  UpstreamStrategy `yaml:"strategy" default:"parallel_best"`
+	UserAgent string           `yaml:"userAgent"`
 }
 
 type UpstreamGroups map[string][]Upstream
+
+func (c *Upstreams) validate(logger *logrus.Entry) {
+	defaults := mustDefault[Upstreams]()
+
+	if !c.Timeout.IsAboveZero() {
+		logger.Warnf("upstreams.timeout <= 0, setting to %s", defaults.Timeout)
+		c.Timeout = defaults.Timeout
+	}
+}
 
 // IsEnabled implements `config.Configurable`.
 func (c *Upstreams) IsEnabled() bool {
@@ -24,6 +34,9 @@ func (c *Upstreams) IsEnabled() bool {
 
 // LogConfig implements `config.Configurable`.
 func (c *Upstreams) LogConfig(logger *logrus.Entry) {
+	logger.Info("init:")
+	log.WithIndent(logger, "  ", c.Init.LogConfig)
+
 	logger.Info("timeout: ", c.Timeout)
 	logger.Info("strategy: ", c.Strategy)
 	logger.Info("groups:")

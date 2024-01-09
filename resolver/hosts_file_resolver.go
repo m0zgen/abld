@@ -26,7 +26,7 @@ const (
 type HostsFileEntry = parsers.HostsFileEntry
 
 type HostsFileResolver struct {
-	configurable[*config.HostsFileConfig]
+	configurable[*config.HostsFile]
 	NextResolver
 	typed
 
@@ -35,7 +35,7 @@ type HostsFileResolver struct {
 }
 
 func NewHostsFileResolver(ctx context.Context,
-	cfg config.HostsFileConfig,
+	cfg config.HostsFile,
 	bootstrap *Bootstrap,
 ) (*HostsFileResolver, error) {
 	r := HostsFileResolver{
@@ -212,7 +212,7 @@ func (r *HostsFileResolver) loadSources(ctx context.Context) error {
 func (r *HostsFileResolver) parseFile(
 	ctx context.Context, opener lists.SourceOpener, hostsChan chan<- *HostsFileEntry,
 ) error {
-	reader, err := opener.Open()
+	reader, err := opener.Open(ctx)
 	if err != nil {
 		return err
 	}
