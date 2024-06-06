@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -27,6 +28,7 @@ import (
 	"github.com/0xERR0R/blocky/redis"
 	"github.com/0xERR0R/blocky/resolver"
 	"github.com/0xERR0R/blocky/util"
+	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
 
 	"github.com/go-chi/chi/v5"
@@ -416,14 +418,14 @@ func createQueryResolver(
 }
 
 func (s *Server) registerDNSHandlers(ctx context.Context) {
-	wrappedOnRequest := func(w dns.ResponseWriter, request *dns.Msg) {
-		s.OnRequest(ctx, w, request)
-	}
-
 	for _, server := range s.dnsServers {
 		handler := server.Handler.(*dns.ServeMux)
-		handler.HandleFunc(".", wrappedOnRequest)
-		handler.HandleFunc("healthcheck.blocky", s.OnHealthCheck)
+		handler.HandleFunc(".", func(w dns.ResponseWriter, m *dns.Msg) {
+			s.OnRequest(ctx, w, m)
+		})
+		handler.HandleFunc("healthcheck.blocky", func(w dns.ResponseWriter, m *dns.Msg) {
+			s.OnHealthCheck(ctx, w, m)
+		})
 	}
 }
 
@@ -550,25 +552,6 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func createResolverRequest(rw dns.ResponseWriter, request *dns.Msg) *model.Request {
-	var hostName string
-
-	var remoteAddr net.Addr
-
-	if rw != nil {
-		remoteAddr = rw.RemoteAddr()
-	}
-
-	clientIP, protocol := resolveClientIPAndProtocol(remoteAddr)
-	con, ok := rw.(dns.ConnectionStater)
-
-	if ok && con.ConnectionState() != nil {
-		hostName = con.ConnectionState().ServerName
-	}
-
-	return newRequest(clientIP, protocol, extractClientIDFromHost(hostName), request)
-}
-
 func extractClientIDFromHost(hostName string) string {
 	const clientIDPrefix = "id-"
 	if strings.HasPrefix(hostName, clientIDPrefix) && strings.Contains(hostName, ".") {
@@ -578,49 +561,136 @@ func extractClientIDFromHost(hostName string) string {
 	return ""
 }
 
-func newRequest(clientIP net.IP, protocol model.RequestProtocol,
-	requestClientID string, request *dns.Msg,
-) *model.Request {
-	return &model.Request{
+func newRequest(
+	ctx context.Context,
+	clientIP net.IP, clientID string,
+	protocol model.RequestProtocol, request *dns.Msg,
+) (context.Context, *model.Request) {
+	ctx, logger := log.CtxWithFields(ctx, logrus.Fields{
+		"req_id":    uuid.New().String(),
+		"question":  util.QuestionToString(request.Question),
+		"client_ip": clientIP,
+	})
+
+	logger.WithFields(logrus.Fields{
+		"client_request_id": request.Id,
+		"client_id":         clientID,
+		"protocol":          protocol,
+	}).Trace("new incoming request")
+
+	req := model.Request{
 		ClientIP:        clientIP,
-		RequestClientID: requestClientID,
+		RequestClientID: clientID,
 		Protocol:        protocol,
 		Req:             request,
-		Log: log.Log().WithFields(logrus.Fields{
-			"question":  util.QuestionToString(request.Question),
-			"client_ip": clientIP,
-		}),
-		RequestTS: time.Now(),
+		RequestTS:       time.Now(),
 	}
+
+	return ctx, &req
+}
+
+func newRequestFromDNS(ctx context.Context, rw dns.ResponseWriter, msg *dns.Msg) (context.Context, *model.Request) {
+	var (
+		clientIP net.IP
+		protocol model.RequestProtocol
+	)
+
+	if rw != nil {
+		clientIP, protocol = resolveClientIPAndProtocol(rw.RemoteAddr())
+	}
+
+	var clientID string
+	if con, ok := rw.(dns.ConnectionStater); ok && con.ConnectionState() != nil {
+		clientID = extractClientIDFromHost(con.ConnectionState().ServerName)
+	}
+
+	return newRequest(ctx, clientIP, clientID, protocol, msg)
+}
+
+func newRequestFromHTTP(ctx context.Context, req *http.Request, msg *dns.Msg) (context.Context, *model.Request) {
+	protocol := model.RequestProtocolTCP
+	clientIP := util.HTTPClientIP(req)
+
+	clientID := chi.URLParam(req, "clientID")
+	if clientID == "" {
+		clientID = extractClientIDFromHost(req.Host)
+	}
+
+	return newRequest(ctx, clientIP, clientID, protocol, msg)
 }
 
 // OnRequest will be executed if a new DNS request is received
-func (s *Server) OnRequest(ctx context.Context, w dns.ResponseWriter, request *dns.Msg) {
-	logger().Debug("new request")
+func (s *Server) OnRequest(ctx context.Context, w dns.ResponseWriter, msg *dns.Msg) {
+	ctx, request := newRequestFromDNS(ctx, w, msg)
 
-	r := createResolverRequest(w, request)
+	s.handleReq(ctx, request, w)
+}
 
-	response, err := s.queryResolver.Resolve(ctx, r)
+type msgWriter interface {
+	WriteMsg(msg *dns.Msg) error
+}
 
+func (s *Server) handleReq(ctx context.Context, request *model.Request, w msgWriter) {
+	response, err := s.resolve(ctx, request)
 	if err != nil {
-		logger().Error("error on processing request:", err)
+		log.FromCtx(ctx).Error("error on processing request:", err)
 
 		m := new(dns.Msg)
-		m.SetRcode(request, dns.RcodeServerFailure)
+		m.SetRcode(request.Req, dns.RcodeServerFailure)
 		err := w.WriteMsg(m)
-		util.LogOnError("can't write message: ", err)
+		util.LogOnError(ctx, "can't write message: ", err)
 	} else {
-		response.Res.MsgHdr.RecursionAvailable = request.MsgHdr.RecursionDesired
-
-		// truncate if necessary
-		response.Res.Truncate(getMaxResponseSize(r))
-
-		// enable compression
-		response.Res.Compress = true
-
 		err := w.WriteMsg(response.Res)
-		util.LogOnError("can't write message: ", err)
+		util.LogOnError(ctx, "can't write message: ", err)
 	}
+}
+
+func (s *Server) resolve(ctx context.Context, request *model.Request) (response *model.Response, rerr error) {
+	defer func() {
+		if val := recover(); val != nil {
+			rerr = fmt.Errorf("panic occurred: %v", val)
+		}
+	}()
+
+	contextUpstreamTimeoutMultiplier := 100
+	timeoutDuration := time.Duration(contextUpstreamTimeoutMultiplier) * s.cfg.Upstreams.Timeout.ToDuration()
+
+	ctx, cancel := context.WithTimeout(ctx, timeoutDuration)
+
+	defer cancel()
+
+	switch {
+	case len(request.Req.Question) == 0:
+		m := new(dns.Msg)
+		m.SetRcode(request.Req, dns.RcodeFormatError)
+
+		log.FromCtx(ctx).Error("query has no questions")
+
+		response = &model.Response{Res: m, RType: model.ResponseTypeCUSTOMDNS, Reason: "CUSTOM DNS"}
+	default:
+		var err error
+
+		response, err = s.queryResolver.Resolve(ctx, request)
+		if err != nil {
+			var upstreamErr *resolver.UpstreamServerError
+
+			if errors.As(err, &upstreamErr) {
+				response = &model.Response{Res: upstreamErr.Msg, RType: model.ResponseTypeRESOLVED, Reason: upstreamErr.Error()}
+			} else {
+				return nil, err
+			}
+		}
+	}
+
+	response.Res.MsgHdr.RecursionAvailable = request.Req.MsgHdr.RecursionDesired
+
+	// truncate if necessary
+	response.Res.Truncate(getMaxResponseSize(request))
+
+	// enable compression
+	response.Res.Compress = true
+
+	return response, nil
 }
 
 // returns EDNS UDP size or if not present, 512 for UDP and 64K for TCP
@@ -638,20 +708,21 @@ func getMaxResponseSize(req *model.Request) int {
 }
 
 // OnHealthCheck Handler for docker health check. Just returns OK code without delegating to resolver chain
-func (s *Server) OnHealthCheck(w dns.ResponseWriter, request *dns.Msg) {
+func (s *Server) OnHealthCheck(ctx context.Context, w dns.ResponseWriter, request *dns.Msg) {
 	resp := new(dns.Msg)
 	resp.SetReply(request)
 	resp.Rcode = dns.RcodeSuccess
 
 	err := w.WriteMsg(resp)
-	util.LogOnError("can't write message: ", err)
+	util.LogOnError(ctx, "can't write message: ", err)
 }
 
 func resolveClientIPAndProtocol(addr net.Addr) (ip net.IP, protocol model.RequestProtocol) {
-	if t, ok := addr.(*net.UDPAddr); ok {
-		return t.IP, model.RequestProtocolUDP
-	} else if t, ok := addr.(*net.TCPAddr); ok {
-		return t.IP, model.RequestProtocolTCP
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		return a.IP, model.RequestProtocolUDP
+	case *net.TCPAddr:
+		return a.IP, model.RequestProtocolTCP
 	}
 
 	return nil, model.RequestProtocolUDP

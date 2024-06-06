@@ -2,8 +2,9 @@ package resolver
 
 import (
 	"context"
-	"crypto/tls"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -109,6 +110,20 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				Expect(err).Should(HaveOccurred())
 			})
 		})
+		When("Configured DNS resolver returns ServFail", func() {
+			It("should return error", func() {
+				mockUpstream := NewMockUDPUpstreamServer().WithAnswerError(dns.RcodeServerFailure)
+
+				sutConfig.Upstream = mockUpstream.Start()
+				sut := newUpstreamResolverUnchecked(sutConfig, nil)
+
+				_, err := sut.Resolve(ctx, newRequest("example.com.", A))
+				Expect(err).Should(HaveOccurred())
+
+				var servErr *UpstreamServerError
+				Expect(errors.As(err, &servErr)).Should(BeTrue())
+			})
+		})
 		When("Timeout occurs", func() {
 			var counter int32
 			var attemptsWithTimeout int32
@@ -180,7 +195,7 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 		})
 	})
 
-	Describe("Using Dns over HTTP (DOH) upstream", func() {
+	Describe("Using DNS over HTTPS (DoH) upstream", func() {
 		var (
 			respFn           func(request *dns.Msg) (response *dns.Msg)
 			modifyHTTPRespFn func(w http.ResponseWriter)
@@ -196,18 +211,34 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 			}
 		})
 
+		transport := func() *http.Transport {
+			upstreamClient := sut.upstreamClient.(*httpUpstreamClient)
+
+			return upstreamClient.client.Transport.(*http.Transport)
+		}
+
 		JustBeforeEach(func() {
 			sutConfig.Upstream = newTestDOHUpstream(respFn, modifyHTTPRespFn)
 			sut = newUpstreamResolverUnchecked(sutConfig, nil)
 
-			// use insecure certificates for test doh upstream
-			sut.upstreamClient.(*httpUpstreamClient).client.Transport = &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-			}
+			// use insecure certificates for test DoH upstream
+			transport().TLSClientConfig.InsecureSkipVerify = true
 		})
-		When("Configured DOH resolver can resolve query", func() {
+
+		When("a proxy is configured", func() {
+			It("should use it", func() {
+				proxy := TestHTTPProxy()
+
+				transport().Proxy = proxy.ReqURL
+
+				_, err := sut.Resolve(ctx, newRequest("example.com.", A))
+				Expect(err).Should(HaveOccurred())
+
+				upstreamHostPort := net.JoinHostPort(sutConfig.Upstream.Host, fmt.Sprint(sutConfig.Port))
+				Expect(proxy.RequestTarget()).Should(Equal(upstreamHostPort))
+			})
+		})
+		When("Configured DoH resolver can resolve query", func() {
 			It("should return answer from DNS upstream", func() {
 				Expect(sut.Resolve(ctx, newRequest("example.com.", A))).
 					Should(
@@ -220,7 +251,7 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 						))
 			})
 		})
-		When("Configured DOH resolver returns wrong http status code", func() {
+		When("Configured DoH resolver returns wrong http status code", func() {
 			BeforeEach(func() {
 				modifyHTTPRespFn = func(w http.ResponseWriter) {
 					w.WriteHeader(http.StatusInternalServerError)
@@ -232,7 +263,7 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				Expect(err.Error()).Should(ContainSubstring("http return code should be 200, but received 500"))
 			})
 		})
-		When("Configured DOH resolver returns wrong content type", func() {
+		When("Configured DoH resolver returns wrong content type", func() {
 			BeforeEach(func() {
 				modifyHTTPRespFn = func(w http.ResponseWriter) {
 					w.Header().Set("content-type", "text")
@@ -245,7 +276,7 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 					ContainSubstring("http return content type should be 'application/dns-message', but was 'text'"))
 			})
 		})
-		When("Configured DOH resolver returns wrong content", func() {
+		When("Configured DoH resolver returns wrong content", func() {
 			BeforeEach(func() {
 				modifyHTTPRespFn = func(w http.ResponseWriter) {
 					_, _ = w.Write([]byte("wrongcontent"))
@@ -257,7 +288,7 @@ var _ = Describe("UpstreamResolver", Label("upstreamResolver"), func() {
 				Expect(err.Error()).Should(ContainSubstring("can't unpack message"))
 			})
 		})
-		When("Configured DOH resolver does not respond", func() {
+		When("Configured DoH resolver does not respond", func() {
 			JustBeforeEach(func() {
 				sutConfig.Upstream = config.Upstream{
 					Net:  config.NetProtocolHttps,

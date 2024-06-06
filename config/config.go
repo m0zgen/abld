@@ -27,6 +27,8 @@ const (
 	udpPort   = 53
 	tlsPort   = 853
 	httpsPort = 443
+
+	secretObfuscator = "********"
 )
 
 type Configurable interface {
@@ -240,7 +242,7 @@ type Config struct {
 		Upstream            *UpstreamGroups `yaml:"upstream"`
 		UpstreamTimeout     *Duration       `yaml:"upstreamTimeout"`
 		DisableIPv6         *bool           `yaml:"disableIPv6"`
-		LogLevel            *log.Level      `yaml:"logLevel"`
+		LogLevel            *logrus.Level   `yaml:"logLevel"`
 		LogFormat           *log.FormatType `yaml:"logFormat"`
 		LogPrivacy          *bool           `yaml:"logPrivacy"`
 		LogTimestamp        *bool           `yaml:"logTimestamp"`
@@ -427,6 +429,12 @@ func mustDefault[T any]() T {
 
 // LoadConfig creates new config from YAML file or a directory containing YAML files
 func LoadConfig(path string, mandatory bool) (rCfg *Config, rerr error) {
+	logger := logrus.NewEntry(log.Log())
+
+	return loadConfig(logger, path, mandatory)
+}
+
+func loadConfig(logger *logrus.Entry, path string, mandatory bool) (rCfg *Config, rerr error) {
 	cfg, err := WithDefaults[Config]()
 	if err != nil {
 		return nil, err
@@ -449,22 +457,31 @@ func LoadConfig(path string, mandatory bool) (rCfg *Config, rerr error) {
 		return nil, fmt.Errorf("can't read config file(s): %w", err)
 	}
 
-	var data []byte
+	var (
+		data       []byte
+		prettyPath string
+	)
 
 	if fs.IsDir() {
+		prettyPath = filepath.Join(path, "*")
+
 		data, err = readFromDir(path, data)
 
 		if err != nil {
 			return nil, fmt.Errorf("can't read config files: %w", err)
 		}
 	} else {
+		prettyPath = path
+
 		data, err = os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("can't read config file: %w", err)
 		}
 	}
 
-	err = unmarshalConfig(data, &cfg)
+	cfg.CustomDNS.Zone.configPath = prettyPath
+
+	err = unmarshalConfig(logger, data, &cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -523,13 +540,11 @@ func isRegularFile(path string) (bool, error) {
 	return isRegular, nil
 }
 
-func unmarshalConfig(data []byte, cfg *Config) error {
+func unmarshalConfig(logger *logrus.Entry, data []byte, cfg *Config) error {
 	err := yaml.UnmarshalStrict(data, cfg)
 	if err != nil {
 		return fmt.Errorf("wrong file structure: %w", err)
 	}
-
-	logger := logrus.NewEntry(log.Log())
 
 	usesDepredOpts := cfg.migrate(logger)
 	if usesDepredOpts {

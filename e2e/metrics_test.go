@@ -16,32 +16,40 @@ import (
 )
 
 var _ = Describe("Metrics functional tests", func() {
-	var blocky testcontainers.Container
-	var err error
-	var metricsURL string
+	var (
+		e2eNet     *testcontainers.DockerNetwork
+		blocky     testcontainers.Container
+		err        error
+		metricsURL string
+	)
+
+	BeforeEach(func(ctx context.Context) {
+		e2eNet = getRandomNetwork(ctx)
+	})
 
 	Describe("Metrics", func() {
 		BeforeEach(func(ctx context.Context) {
-			_, err = createDNSMokkaContainer(ctx, "moka1", `A google/NOERROR("A 1.2.3.4 123")`)
+			_, err = createDNSMokkaContainer(ctx, "moka1", e2eNet, `A google/NOERROR("A 1.2.3.4 123")`)
 			Expect(err).Should(Succeed())
 
-			_, err = createHTTPServerContainer(ctx, "httpserver1", tmpDir, "list1.txt", "domain1.com")
+			_, err = createHTTPServerContainer(ctx, "httpserver1", e2eNet, "list1.txt", "domain1.com")
 			Expect(err).Should(Succeed())
 
-			_, err = createHTTPServerContainer(ctx, "httpserver2", tmpDir, "list2.txt",
+			_, err = createHTTPServerContainer(ctx, "httpserver2", e2eNet, "list2.txt",
 				"domain1.com", "domain2", "domain3")
 			Expect(err).Should(Succeed())
 
-			_, err = createHTTPServerContainer(ctx, "httpserver2", tmpDir, "list2.txt", "domain1.com", "domain2", "domain3")
+			_, err = createHTTPServerContainer(ctx, "httpserver2", e2eNet, "list2.txt",
+				"domain1.com", "domain2", "domain3")
 			Expect(err).Should(Succeed())
 
-			blocky, err = createBlockyContainer(ctx, tmpDir,
+			blocky, err = createBlockyContainer(ctx, e2eNet,
 				"upstreams:",
 				"  groups:",
 				"    default:",
 				"      - moka1",
 				"blocking:",
-				"  blackLists:",
+				"  denylists:",
 				"    group1:",
 				"      - http://httpserver1:8080/list1.txt",
 				"    group2:",
@@ -121,8 +129,8 @@ var _ = Describe("Metrics functional tests", func() {
 			It("Should expose list cache sizes per group as metrics", func(ctx context.Context) {
 				Eventually(fetchBlockyMetrics).WithArguments(ctx, metricsURL).
 					Should(ContainElements(
-						"blocky_blacklist_cache{group=\"group1\"} 1",
-						"blocky_blacklist_cache{group=\"group2\"} 3",
+						"blocky_denylist_cache{group=\"group1\"} 1",
+						"blocky_denylist_cache{group=\"group2\"} 3",
 					))
 			})
 		})

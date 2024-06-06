@@ -79,16 +79,16 @@ type status struct {
 	lock           sync.RWMutex
 }
 
-// BlockingResolver checks request's question (domain name) against black and white lists
+// BlockingResolver checks request's question (domain name) against allow/denylists
 type BlockingResolver struct {
 	configurable[*config.Blocking]
 	NextResolver
 	typed
 
-	blacklistMatcher    *lists.ListCache
-	whitelistMatcher    *lists.ListCache
+	denylistMatcher     *lists.ListCache
+	allowlistMatcher    *lists.ListCache
 	blockHandler        blockHandler
-	whitelistOnlyGroups map[string]bool
+	allowlistOnlyGroups map[string]bool
 	status              *status
 	clientGroupsBlock   map[string][]string
 	redisClient         *redis.Client
@@ -125,11 +125,11 @@ func NewBlockingResolver(ctx context.Context,
 
 	downloader := lists.NewDownloader(cfg.Loading.Downloads, bootstrap.NewHTTPTransport())
 
-	blacklistMatcher, blErr := lists.NewListCache(ctx, lists.ListCacheTypeBlacklist,
-		cfg.Loading, cfg.BlackLists, downloader)
-	whitelistMatcher, wlErr := lists.NewListCache(ctx, lists.ListCacheTypeWhitelist,
-		cfg.Loading, cfg.WhiteLists, downloader)
-	whitelistOnlyGroups := determineWhitelistOnlyGroups(&cfg)
+	denylistMatcher, blErr := lists.NewListCache(ctx, lists.ListCacheTypeDenylist,
+		cfg.Loading, cfg.Denylists, downloader)
+	allowlistMatcher, wlErr := lists.NewListCache(ctx, lists.ListCacheTypeAllowlist,
+		cfg.Loading, cfg.Allowlists, downloader)
+	allowlistOnlyGroups := determineAllowlistOnlyGroups(&cfg)
 
 	err = multierror.Append(err, blErr, wlErr).ErrorOrNil()
 	if err != nil {
@@ -141,9 +141,9 @@ func NewBlockingResolver(ctx context.Context,
 		typed:        withType("blocking"),
 
 		blockHandler:        blockHandler,
-		blacklistMatcher:    blacklistMatcher,
-		whitelistMatcher:    whitelistMatcher,
-		whitelistOnlyGroups: whitelistOnlyGroups,
+		denylistMatcher:     denylistMatcher,
+		allowlistMatcher:    allowlistMatcher,
+		allowlistOnlyGroups: allowlistOnlyGroups,
 		status: &status{
 			enabled:     true,
 			enableTimer: time.NewTimer(0),
@@ -165,7 +165,6 @@ func NewBlockingResolver(ctx context.Context,
 	err = evt.Bus().SubscribeOnce(evt.ApplicationStarted, func(_ ...string) {
 		go res.initFQDNIPCache(ctx)
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -174,18 +173,20 @@ func NewBlockingResolver(ctx context.Context,
 }
 
 func (r *BlockingResolver) redisSubscriber(ctx context.Context) {
+	ctx, logger := r.log(ctx)
+
 	for {
 		select {
 		case em := <-r.redisClient.EnabledChannel:
 			if em != nil {
-				r.log().Debug("Received state from redis: ", em)
+				logger.Debug("Received state from redis: ", em)
 
 				if em.State {
 					r.internalEnableBlocking()
 				} else {
 					err := r.internalDisableBlocking(ctx, em.Duration, em.Groups)
 					if err != nil {
-						r.log().Warn("Blocking couldn't be disabled:", err)
+						logger.Warn("Blocking couldn't be disabled:", err)
 					}
 				}
 			}
@@ -196,18 +197,18 @@ func (r *BlockingResolver) redisSubscriber(ctx context.Context) {
 	}
 }
 
-// RefreshLists triggers the refresh of all black and white lists in the cache
+// RefreshLists triggers the refresh of all allow/denylists in the cache
 func (r *BlockingResolver) RefreshLists() error {
 	var err *multierror.Error
 
-	err = multierror.Append(err, r.blacklistMatcher.Refresh())
-	err = multierror.Append(err, r.whitelistMatcher.Refresh())
+	err = multierror.Append(err, r.denylistMatcher.Refresh())
+	err = multierror.Append(err, r.allowlistMatcher.Refresh())
 
 	return err.ErrorOrNil()
 }
 
 func (r *BlockingResolver) retrieveAllBlockingGroups() []string {
-	result := maps.Keys(r.cfg.BlackLists)
+	result := maps.Keys(r.cfg.Denylists)
 
 	result = append(result, "default")
 	slices.Sort(result)
@@ -215,7 +216,7 @@ func (r *BlockingResolver) retrieveAllBlockingGroups() []string {
 	return result
 }
 
-// EnableBlocking enables the blocking against the blacklists
+// EnableBlocking enables the blocking against the denylists
 func (r *BlockingResolver) EnableBlocking(ctx context.Context) {
 	r.internalEnableBlocking()
 
@@ -268,6 +269,7 @@ func (r *BlockingResolver) internalDisableBlocking(ctx context.Context, duration
 				return fmt.Errorf("group '%s' is unknown", g)
 			}
 		}
+
 		s.disabledGroups = disableGroups
 	}
 
@@ -281,6 +283,7 @@ func (r *BlockingResolver) internalDisableBlocking(ctx context.Context, duration
 	} else {
 		log.Log().Infof("disable blocking for %s for group(s) '%s'", duration,
 			log.EscapeInput(strings.Join(s.disabledGroups, "; ")))
+
 		s.enableTimer = time.AfterFunc(duration, func() {
 			r.EnableBlocking(ctx)
 			log.Log().Info("blocking enabled again")
@@ -308,13 +311,13 @@ func (r *BlockingResolver) BlockingStatus() api.BlockingStatus {
 	}
 }
 
-// returns groups, which have only whitelist entries
-func determineWhitelistOnlyGroups(cfg *config.Blocking) (result map[string]bool) {
-	result = make(map[string]bool, len(cfg.WhiteLists))
+// returns groups, which have only allowlist entries
+func determineAllowlistOnlyGroups(cfg *config.Blocking) (result map[string]bool) {
+	result = make(map[string]bool, len(cfg.Allowlists))
 
-	for g, links := range cfg.WhiteLists {
+	for g, links := range cfg.Allowlists {
 		if len(links) > 0 {
-			if _, found := cfg.BlackLists[g]; !found {
+			if _, found := cfg.Denylists[g]; !found {
 				result[g] = true
 			}
 		}
@@ -341,16 +344,16 @@ func (r *BlockingResolver) handleBlocked(logger *logrus.Entry,
 func (r *BlockingResolver) LogConfig(logger *logrus.Entry) {
 	r.cfg.LogConfig(logger)
 
-	logger.Info("blacklist cache entries:")
-	log.WithIndent(logger, "  ", r.blacklistMatcher.LogConfig)
+	logger.Info("denylist cache entries:")
+	log.WithIndent(logger, "  ", r.denylistMatcher.LogConfig)
 
-	logger.Info("whitelist cache entries:")
-	log.WithIndent(logger, "  ", r.whitelistMatcher.LogConfig)
+	logger.Info("allowlist cache entries:")
+	log.WithIndent(logger, "  ", r.allowlistMatcher.LogConfig)
 }
 
-func (r *BlockingResolver) hasWhiteListOnlyAllowed(groupsToCheck []string) bool {
+func (r *BlockingResolver) hasAllowlistOnlyAllowed(groupsToCheck []string) bool {
 	for _, group := range groupsToCheck {
-		if _, found := r.whitelistOnlyGroups[group]; found {
+		if _, found := r.allowlistOnlyGroups[group]; found {
 			return true
 		}
 	}
@@ -358,31 +361,31 @@ func (r *BlockingResolver) hasWhiteListOnlyAllowed(groupsToCheck []string) bool 
 	return false
 }
 
-func (r *BlockingResolver) handleBlacklist(ctx context.Context, groupsToCheck []string,
+func (r *BlockingResolver) handleDenylist(ctx context.Context, groupsToCheck []string,
 	request *model.Request, logger *logrus.Entry,
 ) (bool, *model.Response, error) {
 	logger.WithField("groupsToCheck", strings.Join(groupsToCheck, "; ")).Debug("checking groups for request")
-	whitelistOnlyAllowed := r.hasWhiteListOnlyAllowed(groupsToCheck)
+	allowlistOnlyAllowed := r.hasAllowlistOnlyAllowed(groupsToCheck)
 
 	for _, question := range request.Req.Question {
 		domain := util.ExtractDomain(question)
 		logger := logger.WithField("domain", domain)
 
-		if groups := r.matches(groupsToCheck, r.whitelistMatcher, domain); len(groups) > 0 {
-			logger.WithField("groups", groups).Debugf("domain is whitelisted")
+		if groups := r.matches(groupsToCheck, r.allowlistMatcher, domain); len(groups) > 0 {
+			logger.WithField("groups", groups).Debugf("domain is allowlisted")
 
 			resp, err := r.next.Resolve(ctx, request)
 
 			return true, resp, err
 		}
 
-		if whitelistOnlyAllowed {
-			resp, err := r.handleBlocked(logger, request, question, "BLOCKED (WHITELIST ONLY)")
+		if allowlistOnlyAllowed {
+			resp, err := r.handleBlocked(logger, request, question, "BLOCKED (ALLOWLIST ONLY)")
 
 			return true, resp, err
 		}
 
-		if groups := r.matches(groupsToCheck, r.blacklistMatcher, domain); len(groups) > 0 {
+		if groups := r.matches(groupsToCheck, r.denylistMatcher, domain); len(groups) > 0 {
 			resp, err := r.handleBlocked(logger, request, question, fmt.Sprintf("BLOCKED (%s)", strings.Join(groups, ",")))
 
 			return true, resp, err
@@ -392,13 +395,13 @@ func (r *BlockingResolver) handleBlacklist(ctx context.Context, groupsToCheck []
 	return false, nil, nil
 }
 
-// Resolve checks the query against the blacklist and delegates to next resolver if domain is not blocked
+// Resolve checks the query against the denylist and delegates to next resolver if domain is not blocked
 func (r *BlockingResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
-	logger := log.WithPrefix(request.Log, "blacklist_resolver")
+	ctx, logger := r.log(ctx)
 	groupsToCheck := r.groupsToCheckForClient(request)
 
 	if len(groupsToCheck) > 0 {
-		handled, resp, err := r.handleBlacklist(ctx, groupsToCheck, request, logger)
+		handled, resp, err := r.handleDenylist(ctx, groupsToCheck, request, logger)
 		if handled {
 			return resp, err
 		}
@@ -412,9 +415,9 @@ func (r *BlockingResolver) Resolve(ctx context.Context, request *model.Request) 
 			if len(entryToCheck) > 0 {
 				logger := logger.WithField("response_entry", entryToCheck)
 
-				if groups := r.matches(groupsToCheck, r.whitelistMatcher, entryToCheck); len(groups) > 0 {
-					logger.WithField("groups", groups).Debugf("%s is whitelisted", tName)
-				} else if groups := r.matches(groupsToCheck, r.blacklistMatcher, entryToCheck); len(groups) > 0 {
+				if groups := r.matches(groupsToCheck, r.allowlistMatcher, entryToCheck); len(groups) > 0 {
+					logger.WithField("groups", groups).Debugf("%s is allowlisted", tName)
+				} else if groups := r.matches(groupsToCheck, r.denylistMatcher, entryToCheck); len(groups) > 0 {
 					return r.handleBlocked(logger, request, request.Req.Question[0], fmt.Sprintf("BLOCKED %s (%s)", tName,
 						strings.Join(groups, ",")))
 				}
@@ -575,7 +578,9 @@ func (b ipBlockHandler) handleBlock(question dns.Question, response *dns.Msg) {
 }
 
 func (r *BlockingResolver) queryForFQIdentifierIPs(ctx context.Context, identifier string) (*[]net.IP, time.Duration) {
-	prefixedLog := log.WithPrefix(r.log(), "client_id_cache")
+	ctx, logger := r.logWith(ctx, func(logger *logrus.Entry) *logrus.Entry {
+		return log.WithPrefix(logger, "client_id_cache")
+	})
 
 	var result []net.IP
 
@@ -584,7 +589,6 @@ func (r *BlockingResolver) queryForFQIdentifierIPs(ctx context.Context, identifi
 	for _, qType := range []uint16{dns.TypeA, dns.TypeAAAA} {
 		resp, err := r.next.Resolve(ctx, &model.Request{
 			Req: util.NewMsgWithQuestion(identifier, dns.Type(qType)),
-			Log: prefixedLog,
 		})
 
 		if err == nil && resp.Res.Rcode == dns.RcodeSuccess {
@@ -598,9 +602,14 @@ func (r *BlockingResolver) queryForFQIdentifierIPs(ctx context.Context, identifi
 					result = append(result, v.AAAA)
 				}
 			}
-
-			prefixedLog.Debugf("resolved IPs '%v' for fq identifier '%s'", result, identifier)
 		}
+	}
+
+	if len(result) != 0 {
+		logger.WithFields(logrus.Fields{
+			"ips":       result,
+			"client_id": identifier,
+		}).Debug("resolved client IPs")
 	}
 
 	return &result, ttl

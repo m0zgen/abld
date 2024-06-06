@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	"github.com/0xERR0R/blocky/config"
-	"github.com/0xERR0R/blocky/log"
 	"github.com/0xERR0R/blocky/model"
 	"github.com/0xERR0R/blocky/util"
 
@@ -66,7 +65,7 @@ func (r *StrictResolver) String() string {
 
 	upstreams := make([]string, len(resolvers))
 	for i, s := range resolvers {
-		upstreams[i] = fmt.Sprintf("%s", s.resolver)
+		upstreams[i] = s.resolver.String()
 	}
 
 	return fmt.Sprintf("%s upstreams '%s (%s)'", strictResolverType, r.cfg.Name, strings.Join(upstreams, ","))
@@ -74,7 +73,7 @@ func (r *StrictResolver) String() string {
 
 // Resolve sends the query request in a strict order to the upstream resolvers
 func (r *StrictResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
-	logger := log.WithPrefix(request.Log, strictResolverType)
+	ctx, logger := r.log(ctx)
 
 	// start with first resolver
 	for _, resolver := range *r.resolvers.Load() {

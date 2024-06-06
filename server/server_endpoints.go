@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/0xERR0R/blocky/resolver"
@@ -133,9 +132,8 @@ func (s *Server) dohPostRequestHandler(rw http.ResponseWriter, req *http.Request
 	s.processDohMessage(rawMsg, rw, req)
 }
 
-func (s *Server) processDohMessage(rawMsg []byte, rw http.ResponseWriter, req *http.Request) {
+func (s *Server) processDohMessage(rawMsg []byte, rw http.ResponseWriter, httpReq *http.Request) {
 	msg := new(dns.Msg)
-
 	if err := msg.Unpack(rawMsg); err != nil {
 		logger().Error("can't deserialize message: ", err)
 		http.Error(rw, err.Error(), http.StatusBadRequest)
@@ -143,61 +141,40 @@ func (s *Server) processDohMessage(rawMsg []byte, rw http.ResponseWriter, req *h
 		return
 	}
 
-	clientID := chi.URLParam(req, "clientID")
-	if clientID == "" {
-		clientID = extractClientIDFromHost(req.Host)
-	}
+	ctx, dnsReq := newRequestFromHTTP(httpReq.Context(), httpReq, msg)
 
-	r := newRequest(net.ParseIP(extractIP(req)), model.RequestProtocolTCP, clientID, msg)
-
-	resResponse, err := s.queryResolver.Resolve(req.Context(), r)
-	if err != nil {
-		logAndResponseWithError(err, "unable to process query: ", rw)
-
-		return
-	}
-
-	response := new(dns.Msg)
-	response.SetReply(msg)
-	// enable compression
-	resResponse.Res.Compress = true
-
-	b, err := resResponse.Res.Pack()
-	if err != nil {
-		logAndResponseWithError(err, "can't serialize message: ", rw)
-
-		return
-	}
-
-	rw.Header().Set("content-type", dnsContentType)
-
-	_, err = rw.Write(b)
-	logAndResponseWithError(err, "can't write response: ", rw)
+	s.handleReq(ctx, dnsReq, httpMsgWriter{rw})
 }
 
-func extractIP(r *http.Request) string {
-	hostPort := r.Header.Get("X-FORWARDED-FOR")
-
-	if hostPort == "" {
-		hostPort = r.RemoteAddr
-	}
-
-	hostPort = strings.ReplaceAll(hostPort, "[", "")
-	hostPort = strings.ReplaceAll(hostPort, "]", "")
-	index := strings.LastIndex(hostPort, ":")
-
-	if index >= 0 {
-		return hostPort[:index]
-	}
-
-	return hostPort
+type httpMsgWriter struct {
+	rw http.ResponseWriter
 }
 
-func (s *Server) Query(ctx context.Context, question string, qType dns.Type) (*model.Response, error) {
-	dnsRequest := util.NewMsgWithQuestion(question, qType)
-	r := createResolverRequest(nil, dnsRequest)
+func (r httpMsgWriter) WriteMsg(msg *dns.Msg) error {
+	b, err := msg.Pack()
+	if err != nil {
+		return err
+	}
 
-	return s.queryResolver.Resolve(ctx, r)
+	r.rw.Header().Set("content-type", dnsContentType)
+
+	// https://www.rfc-editor.org/rfc/rfc8484#section-4.2.1
+	r.rw.WriteHeader(http.StatusOK)
+
+	_, err = r.rw.Write(b)
+
+	return err
+}
+
+func (s *Server) Query(
+	ctx context.Context, serverHost string, clientIP net.IP, question string, qType dns.Type,
+) (*model.Response, error) {
+	msg := util.NewMsgWithQuestion(question, qType)
+	clientID := extractClientIDFromHost(serverHost)
+
+	ctx, req := newRequest(ctx, clientIP, clientID, model.RequestProtocolTCP, msg)
+
+	return s.resolve(ctx, req)
 }
 
 func createHTTPSRouter(cfg *config.Config) *chi.Mux {
@@ -247,7 +224,9 @@ func configureStaticAssetsHandler(router *chi.Mux) {
 func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 	router.Get("/", func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set(contentTypeHeader, htmlContentType)
+
 		t := template.New("index")
+
 		_, _ = t.Parse(web.IndexTmpl)
 
 		type HandlerLink struct {
@@ -260,11 +239,13 @@ func configureRootHandler(cfg *config.Config, router *chi.Mux) {
 			Version   string
 			BuildTime string
 		}
+
 		pd := PageData{
 			Links:     nil,
 			Version:   util.Version,
 			BuildTime: util.BuildTime,
 		}
+
 		pd.Links = []HandlerLink{
 			{
 				URL:   "https://lab.sys-adm.in",

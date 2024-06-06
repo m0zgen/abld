@@ -7,13 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/0xERR0R/blocky/config"
-	"github.com/0xERR0R/blocky/log"
 	"github.com/0xERR0R/blocky/model"
 	"github.com/0xERR0R/blocky/util"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/mock"
 
 	. "github.com/0xERR0R/blocky/helpertest"
@@ -79,10 +78,15 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			})
 
 			Describe("HTTP transport", func() {
-				It("should use the system resolver", func() {
+				It("should use Go default values", func() {
 					transport := sut.NewHTTPTransport()
-
 					Expect(transport).ShouldNot(BeNil())
+
+					Expect(
+						reflect.ValueOf(transport.Proxy).Pointer(),
+					).Should(Equal(
+						reflect.ValueOf(http.ProxyFromEnvironment).Pointer(),
+					))
 				})
 			})
 
@@ -310,7 +314,6 @@ var _ = Describe("Bootstrap", Label("bootstrap"), func() {
 			It("uses the bootstrap upstream", func() {
 				mainReq := &model.Request{
 					Req: util.NewMsgWithQuestion("example.com.", A),
-					Log: logrus.NewEntry(log.Log()),
 				}
 
 				mockUpstreamServer := NewMockUDPUpstreamServer().WithAnswerRR("example.com 123 IN A 123.124.122.122")

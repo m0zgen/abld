@@ -25,10 +25,12 @@ var (
 
 func newServeCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "serve",
-		Args:  cobra.NoArgs,
-		Short: "start blocky DNS server (default command)",
-		RunE:  startServer,
+		Use:               "serve",
+		Args:              cobra.NoArgs,
+		Short:             "start blocky DNS server (default command)",
+		RunE:              startServer,
+		PersistentPreRunE: initConfigPreRun,
+		SilenceUsage:      true,
 	}
 }
 
@@ -63,7 +65,7 @@ func startServer(_ *cobra.Command, _ []string) error {
 		select {
 		case <-signals:
 			log.Log().Infof("Terminating...")
-			util.LogOnError("can't stop server: ", srv.Stop(ctx))
+			util.LogOnError(ctx, "can't stop server: ", srv.Stop(ctx))
 			done <- true
 
 		case err := <-errChan:

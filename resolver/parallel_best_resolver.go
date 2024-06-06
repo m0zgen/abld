@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -140,7 +141,7 @@ func (r *ParallelBestResolver) String() string {
 
 	upstreams := make([]string, len(resolvers))
 	for i, s := range resolvers {
-		upstreams[i] = fmt.Sprintf("%s", s.resolver)
+		upstreams[i] = s.resolver.String()
 	}
 
 	return fmt.Sprintf("%s upstreams '%s (%s)'", r.Type(), r.cfg.Name, strings.Join(upstreams, ","))
@@ -148,7 +149,7 @@ func (r *ParallelBestResolver) String() string {
 
 // Resolve sends the query request to multiple upstream resolvers and returns the fastest result
 func (r *ParallelBestResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
-	logger := log.WithPrefix(request.Log, parallelResolverType)
+	ctx, logger := r.log(ctx)
 
 	allResolvers := *r.resolvers.Load()
 
@@ -162,7 +163,7 @@ func (r *ParallelBestResolver) Resolve(ctx context.Context, request *model.Reque
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // abort requests to resolvers that lost the race
 
-	resolvers := pickRandom(allResolvers, r.resolverCount)
+	resolvers := pickRandom(ctx, allResolvers, r.resolverCount)
 	ch := make(chan requestResponse, len(resolvers))
 
 	for _, resolver := range resolvers {
@@ -211,7 +212,7 @@ func (r *ParallelBestResolver) retryWithDifferent(
 	ctx context.Context, logger *logrus.Entry, request *model.Request, resolvers []*upstreamResolverStatus,
 ) (*model.Response, error) {
 	// second try (if retryWithDifferentResolver == true)
-	resolver := weightedRandom(*r.resolvers.Load(), resolvers)
+	resolver := weightedRandom(ctx, *r.resolvers.Load(), resolvers)
 	logger.Debugf("using %s as second resolver", resolver.resolver)
 
 	resp, err := resolver.resolve(ctx, request)
@@ -228,17 +229,17 @@ func (r *ParallelBestResolver) retryWithDifferent(
 }
 
 // pickRandom picks n (resolverCount) different random resolvers from the given resolver pool
-func pickRandom(resolvers []*upstreamResolverStatus, resolverCount int) []*upstreamResolverStatus {
+func pickRandom(ctx context.Context, resolvers []*upstreamResolverStatus, resolverCount int) []*upstreamResolverStatus {
 	chosenResolvers := make([]*upstreamResolverStatus, 0, resolverCount)
 
 	for i := 0; i < resolverCount; i++ {
-		chosenResolvers = append(chosenResolvers, weightedRandom(resolvers, chosenResolvers))
+		chosenResolvers = append(chosenResolvers, weightedRandom(ctx, resolvers, chosenResolvers))
 	}
 
 	return chosenResolvers
 }
 
-func weightedRandom(in, excludedResolvers []*upstreamResolverStatus) *upstreamResolverStatus {
+func weightedRandom(ctx context.Context, in, excludedResolvers []*upstreamResolverStatus) *upstreamResolverStatus {
 	const errorWindowInSec = 60
 
 	choices := make([]weightedrand.Choice[*upstreamResolverStatus, uint], 0, len(in))
@@ -263,7 +264,13 @@ outer:
 	}
 
 	c, err := weightedrand.NewChooser(choices...)
-	util.LogOnError("can't choose random weighted resolver: ", err)
+	if err != nil {
+		log.FromCtx(ctx).WithError(err).Error("can't choose random weighted resolver, falling back to uniform random")
+
+		val := rand.Int() //nolint:gosec // pseudo-randomness is good enough
+
+		return choices[val%len(choices)].Item
+	}
 
 	return c.Pick()
 }

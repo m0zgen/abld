@@ -13,9 +13,10 @@ import (
 
 func newBlockingCommand() *cobra.Command {
 	c := &cobra.Command{
-		Use:     "blocking",
-		Aliases: []string{"block"},
-		Short:   "Control status of blocking resolver",
+		Use:               "blocking",
+		Aliases:           []string{"block"},
+		Short:             "Control status of blocking resolver",
+		PersistentPreRunE: initConfigPreRun,
 	}
 	c.AddCommand(&cobra.Command{
 		Use:     "enable",
@@ -109,6 +110,7 @@ func statusBlocking(_ *cobra.Command, _ []string) error {
 		if resp.JSON200.DisabledGroups != nil {
 			groupNames = strings.Join(*resp.JSON200.DisabledGroups, "; ")
 		}
+
 		if resp.JSON200.AutoEnableInSec == nil || *resp.JSON200.AutoEnableInSec == 0 {
 			log.Log().Infof("blocking disabled for groups: %s", groupNames)
 		} else {

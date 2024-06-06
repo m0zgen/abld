@@ -38,6 +38,7 @@ func NewQueryLoggingResolver(ctx context.Context, cfg config.QueryLog) *QueryLog
 	err := retry.Do(
 		func() error {
 			var err error
+
 			switch cfg.Type {
 			case config.QueryLogTypeCsv:
 				writer, err = querylog.NewCSVWriter(cfg.Target, false, cfg.LogRetentionDays)
@@ -112,23 +113,43 @@ func (r *QueryLoggingResolver) doCleanUp() {
 
 // Resolve logs the query, duration and the result
 func (r *QueryLoggingResolver) Resolve(ctx context.Context, request *model.Request) (*model.Response, error) {
-	logger := log.WithPrefix(request.Log, queryLoggingResolverType)
+	ctx, logger := r.log(ctx)
 
 	start := time.Now()
-
 	resp, err := r.next.Resolve(ctx, request)
-
 	duration := time.Since(start).Milliseconds()
 
-	if err == nil {
+	if err != nil {
+		return nil, err
+	}
+
+	entry := r.createLogEntry(request, resp, start, duration)
+
+	if r.ignore(resp) {
+		// Log to the console for debugging purposes
+		logger.WithFields(querylog.LogEntryFields(entry)).Debug("ignored querylog entry")
+	} else {
 		select {
-		case r.logChan <- r.createLogEntry(request, resp, start, duration):
+		case r.logChan <- entry:
 		default:
 			logger.Error("query log writer is too slow, log entry will be dropped")
 		}
 	}
 
-	return resp, err
+	return resp, nil
+}
+
+func (r *QueryLoggingResolver) ignore(response *model.Response) bool {
+	cfg := r.cfg.Ignore
+
+	if cfg.SUDN && response.RType == model.ResponseTypeSPECIAL {
+		return true
+	}
+
+	// If we add more ways to ignore entries, it would be nice to log why it's ignored in the debug log
+	// Probably make this func return a (string, bool).
+
+	return false
 }
 
 func (r *QueryLoggingResolver) createLogEntry(request *model.Request, response *model.Response,
@@ -170,6 +191,8 @@ func (r *QueryLoggingResolver) createLogEntry(request *model.Request, response *
 
 // write entry: if log directory is configured, write to log file
 func (r *QueryLoggingResolver) writeLog(ctx context.Context) {
+	ctx, logger := r.log(ctx)
+
 	for {
 		select {
 		case logEntry := <-r.logChan:
@@ -177,12 +200,13 @@ func (r *QueryLoggingResolver) writeLog(ctx context.Context) {
 
 			r.writer.Write(logEntry)
 
-			halfCap := cap(r.logChan) / 2 //nolint:gomnd
+			halfCap := cap(r.logChan) / 2 //nolint:mnd
 
 			// if log channel is > 50% full, this could be a problem with slow writer (external storage over network etc.)
 			if len(r.logChan) > halfCap {
-				r.log().WithField("channel_len",
-					len(r.logChan)).Warnf("query log writer is too slow, write duration: %d ms", time.Since(start).Milliseconds())
+				logger.
+					WithField("channel_len", len(r.logChan)).
+					Warnf("query log writer is too slow, write duration: %d ms", time.Since(start).Milliseconds())
 			}
 		case <-ctx.Done():
 			return

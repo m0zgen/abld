@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 )
 
@@ -13,17 +14,83 @@ type CustomDNS struct {
 	RewriterConfig      `yaml:",inline"`
 	CustomTTL           Duration         `yaml:"customTTL" default:"1h"`
 	Mapping             CustomDNSMapping `yaml:"mapping"`
+	Zone                ZoneFileDNS      `yaml:"zone" default:""`
 	FilterUnmappedTypes bool             `yaml:"filterUnmappedTypes" default:"true"`
 }
 
-// CustomDNSMapping mapping for the custom DNS configuration
-type CustomDNSMapping struct {
-	HostIPs map[string][]net.IP `yaml:"hostIPs"`
+type (
+	CustomDNSMapping map[string]CustomDNSEntries
+	CustomDNSEntries []dns.RR
+
+	ZoneFileDNS struct {
+		RRs        CustomDNSMapping
+		configPath string
+	}
+)
+
+func (z *ZoneFileDNS) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var input string
+	if err := unmarshal(&input); err != nil {
+		return err
+	}
+
+	result := make(CustomDNSMapping)
+
+	zoneParser := dns.NewZoneParser(strings.NewReader(input), "", z.configPath)
+	zoneParser.SetIncludeAllowed(true)
+
+	for {
+		zoneRR, ok := zoneParser.Next()
+
+		if !ok {
+			if zoneParser.Err() != nil {
+				return zoneParser.Err()
+			}
+
+			// Done
+			break
+		}
+
+		domain := zoneRR.Header().Name
+
+		if _, ok := result[domain]; !ok {
+			result[domain] = make(CustomDNSEntries, 0, 1)
+		}
+
+		result[domain] = append(result[domain], zoneRR)
+	}
+
+	z.RRs = result
+
+	return nil
+}
+
+func (c *CustomDNSEntries) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var input string
+	if err := unmarshal(&input); err != nil {
+		return err
+	}
+
+	parts := strings.Split(input, ",")
+	result := make(CustomDNSEntries, len(parts))
+
+	for i, part := range parts {
+		rr, err := configToRR(strings.TrimSpace(part))
+		if err != nil {
+			return err
+		}
+
+		result[i] = rr
+	}
+
+	*c = result
+
+	return nil
 }
 
 // IsEnabled implements `config.Configurable`.
 func (c *CustomDNS) IsEnabled() bool {
-	return len(c.Mapping.HostIPs) != 0
+	return len(c.Mapping) != 0
 }
 
 // LogConfig implements `config.Configurable`.
@@ -33,36 +100,26 @@ func (c *CustomDNS) LogConfig(logger *logrus.Entry) {
 
 	logger.Info("mapping:")
 
-	for key, val := range c.Mapping.HostIPs {
+	for key, val := range c.Mapping {
 		logger.Infof("  %s = %s", key, val)
 	}
 }
 
-// UnmarshalYAML implements `yaml.Unmarshaler`.
-func (c *CustomDNSMapping) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var input map[string]string
-	if err := unmarshal(&input); err != nil {
-		return err
+func configToRR(ipStr string) (dns.RR, error) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid IP address '%s'", ipStr)
 	}
 
-	result := make(map[string][]net.IP, len(input))
+	if ip.To4() != nil {
+		a := new(dns.A)
+		a.A = ip
 
-	for k, v := range input {
-		var ips []net.IP
-
-		for _, part := range strings.Split(v, ",") {
-			ip := net.ParseIP(strings.TrimSpace(part))
-			if ip == nil {
-				return fmt.Errorf("invalid IP address '%s'", part)
-			}
-
-			ips = append(ips, ip)
-		}
-
-		result[k] = ips
+		return a, nil
 	}
 
-	c.HostIPs = result
+	aaaa := new(dns.AAAA)
+	aaaa.AAAA = ip
 
-	return nil
+	return aaaa, nil
 }

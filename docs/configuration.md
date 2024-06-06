@@ -49,12 +49,12 @@ All logging port are optional.
 
 All logging options are optional.
 
-| Parameter     | Type                            | Default value | Description                                                                                                                                      |
-| ------------- | ------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| log.level     | enum (debug, info, warn, error) | info          | Log level                                                                                                                                        |
-| log.format    | enum (text, json)               | text          | Log format (text or json).                                                                                                                       |
-| log.timestamp | bool                            | true          | Log time stamps (true or false).                                                                                                                 |
-| log.privacy   | bool                            | false         | Obfuscate log output (replace all alphanumeric characters with *) for user sensitive data like request domains or responses to increase privacy. |
+| Parameter     | Type                                   | Default value | Description                                                                                                                                      |
+| ------------- | -------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| log.level     | enum (trace, debug, info, warn, error) | info          | Log level                                                                                                                                        |
+| log.format    | enum (text, json)                      | text          | Log format (text or json).                                                                                                                       |
+| log.timestamp | bool                                   | true          | Log timestamps (true or false).                                                                                                                 |
+| log.privacy   | bool                                   | false         | Obfuscate log output (replace all alphanumeric characters with *) for user sensitive data like request domains or responses to increase privacy. |
 
 !!! example
 
@@ -81,11 +81,11 @@ This applies to all of them. The default strategy is blocking.
 
 | Parameter               | Type                                 | Mandatory | Default value | Description                                    |
 | ----------------------- | ------------------------------------ | --------- | ------------- | ---------------------------------------------- |
-| usptreams.groups        | map of name to upstream              | yes       |               | Upstream DNS servers to use, in groups.        |
-| usptreams.init.strategy | enum (blocking, failOnError, fast)   | no        | blocking      | See [Init Strategy](#init-strategy) and below. |
-| usptreams.strategy      | enum (parallel_best, random, strict) | no        | parallel_best | Upstream server usage strategy.                |
-| usptreams.timeout       | duration                             | no        | 2s            | Upstream connection timeout.                   |
-| usptreams.userAgent     | string                               | no        |               | HTTP User Agent when connecting to upstreams.  |
+| upstreams.groups        | map of name to upstream              | yes       |               | Upstream DNS servers to use, in groups.        |
+| upstreams.init.strategy | enum (blocking, failOnError, fast)   | no        | blocking      | See [Init Strategy](#init-strategy) and below. |
+| upstreams.strategy      | enum (parallel_best, random, strict) | no        | parallel_best | Upstream server usage strategy.                |
+| upstreams.timeout       | duration                             | no        | 2s            | Upstream connection timeout.                   |
+| upstreams.userAgent     | string                               | no        |               | HTTP User Agent when connecting to upstreams.  |
 
 For `init.strategy`, the "init" is testing the given resolvers for each group. The potentially fatal error, depending on the strategy, is if a group has no functional resolvers.
 
@@ -259,12 +259,13 @@ You can define your own domain name to IP mappings. For example, you can use a u
 or define a domain name for your local device on order to use the HTTPS certificate. Multiple IP addresses for one
 domain must be separated by a comma.
 
-| Parameter           | Type                                    | Mandatory | Default value |
-| ------------------- | --------------------------------------- | --------- | ------------- |
-| customTTL           | duration (no unit is minutes)           | no        | 1h            |
-| rewrite             | string: string (domain: domain)         | no        |               |
-| mapping             | string: string (hostname: address list) | no        |               |
-| filterUnmappedTypes | boolean                                 | no        | true          |
+| Parameter           | Type                                                   | Mandatory | Default value |
+| ------------------- | ------------------------------------------------------ | --------- | ------------- |
+| customTTL           | duration used for simple mappings (no unit is minutes) | no        | 1h            |
+| rewrite             | string: string (domain: domain)                        | no        |               |
+| mapping             | string: string (hostname: address or CNAME)            | no        |               |
+| zone                | string containing a DNS Zone                           | no        |               |
+| filterUnmappedTypes | boolean                                                | no        | true          |
 
 !!! example
 
@@ -278,10 +279,22 @@ domain must be separated by a comma.
       mapping:
         printer.lan: 192.168.178.3
         otherdevice.lan: 192.168.178.15,2001:0db8:85a3:08d3:1319:8a2e:0370:7344
+      zone: |
+        $ORIGIN example.com.
+        www 3600 A 1.2.3.4
+        @ 3600 CNAME www
     ```
 
 This configuration will also resolve any subdomain of the defined domain, recursively. For example querying any of
 `printer.lan`, `my.printer.lan` or `i.love.my.printer.lan` will return 192.168.178.3.
+
+CNAME records are supported by utilizing the `zone` parameter. The zone file is a multiline string containing a [DNS Zone File](https://en.wikipedia.org/wiki/Zone_file#Example_file).
+For records defined using the `zone` parameter, the `customTTL` parameter is unused. Instead, the TTL is defined in the zone directly.
+The following directives are supported in the zone file:
+* `$ORIGIN` - sets the origin for relative domain names
+* `$TTL` - sets the default TTL for records in the zone
+* `$INCLUDE` - includes another zone file relative to the blocky executable
+* `$GENERATE` - generates a range of records
 
 With the optional parameter `rewrite` you can replace domain part of the query with the defined part **before** the
 resolver lookup is performed.
@@ -382,16 +395,16 @@ contains a map of client name and multiple IP addresses.
 
     Use `192.168.178.1` for rDNS lookup. Take second name if present, if not take first name. IP address `192.168.178.29` is mapped to `laptop` as client name.
 
-## Blocking and whitelisting
+## Blocking and allowlisting
 
 Blocky can use lists of domains and IPs to block (e.g. advertisement, malware,
 trackers, adult sites). You can group several list sources together and define the blocking behavior per client.
 Blocking uses the [DNS sinkhole](https://en.wikipedia.org/wiki/DNS_sinkhole) approach. For each DNS query, the domain name from
 the request, IP address from the response, and any CNAME records will be checked to determine whether to block the query or not.
 
-To avoid over-blocking, you can use whitelists.
+To avoid over-blocking, you can use allowlists.
 
-### Definition black and whitelists
+### Definition allow/denylists
 
 Lists are defined in groups. This allows using different sets of lists for different clients.
 
@@ -408,7 +421,7 @@ The supported list formats are:
 
     ```yaml
     blocking:
-      blackLists:
+      denylists:
         ads:
           - https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt
           - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
@@ -423,25 +436,24 @@ The supported list formats are:
             /^banners?[_.-]/
         special:
           - https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews/hosts
-      whiteLists:
+      allowlists:
         ads:
-          - whitelist.txt
+          - allowlist.txt
           - /path/to/file.txt
           - |
             # inline definition with YAML literal block scalar style
-            whitelistdomain.com
+            allowlistdomain.com
     ```
 
     In this example you can see 2 groups: **ads** and **special** with one list. The **ads** group includes 2 inline lists.
 
 !!! warning
 
-    If the same group has black and whitelists, whitelists will be used to disable particular blacklist entries.
-    If a group has **only** whitelist entries -> this means only domains from this list are allowed, all other domains will
-    be blocked.
+    If the same group has **both** allow/denylists, allowlists take precedence. Meaning if a domain is both blocked and allowed, it will be allowed.
+    If a group has **only allowlist** entries, only domains from this list are allowed, and all others be blocked.
 
 !!! warning
-    You must also define client group mapping, otherwise you black and whitelist definition will have no effect.
+    You must also define a client group mapping, otherwise the allow/denylist definitions will have no effect.
 
 #### Wildcard support
 
@@ -820,7 +832,7 @@ These settings apply only to the resolver under which they are nested.
     ```yaml
     blocking:
       loading:
-        # only applies to white/blacklists
+        # only applies to allow/denylists
 
     hostsFile:
       loading:
@@ -829,8 +841,8 @@ These settings apply only to the resolver under which they are nested.
 
 #### Refresh / Reload
 
-To keep source contents up-to-date, blocky can periodically refresh and reparse them. Default period is **
-4 hours**. You can configure this by setting the `refreshPeriod` parameter to a value in **duration format**.  
+To keep source contents up-to-date, blocky can periodically refresh and reparse them. Default period is
+**4 hours**. You can configure this by setting the `refreshPeriod` parameter to a value in **duration format**.  
 A value of zero or less will disable this feature.
 
 !!! example

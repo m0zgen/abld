@@ -10,7 +10,7 @@ Following metrics will be exported:
 
 | name                                             |   Description                                            |
 | ------------------------------------------------ | -------------------------------------------------------- |
-| blocky_blacklist_cache / blocky_whitelist_cache  | Number of entries in blacklist/whitelist cache, partitioned by group |
+| blocky_denylist_cache / blocky_allowlist_cache   | Number of entries in denylist/allowlist cache, partitioned by group |
 | blocky_error_total                | Number of total queries that ended in error for any reason |
 | blocky_query_total                | Number of total queries, partitioned by client and DNS request type (A, AAAA, PTR, etc) |
 | blocky_request_duration_ms_bucket | Request duration histogram, partitioned by response type (Blocked, cached, etc)  |
@@ -25,7 +25,7 @@ Following metrics will be exported:
 ### Grafana dashboard
 
 Example [Grafana](https://grafana.com/) dashboard
-definition [as JSON](https://github.com/0xERR0R/blocky/blob/main/docs/blocky-grafana.json)
+definition [as JSON](blocky-grafana.json)
 or [at grafana.com](https://grafana.com/grafana/dashboards/13768)
 ![grafana-dashboard](grafana-dashboard.png).
 
@@ -45,7 +45,7 @@ blocky, prometheus (with configured scraper for blocky) and grafana with prometh
 ## MySQL / MariaDB
 
 If database query logging is activated (see [Query logging](configuration.md#query-logging)), you can use following
-Grafana Dashboard [as JSON](https://github.com/0xERR0R/blocky/blob/main/docs/blocky-query-grafana.json)
+Grafana Dashboard [as JSON](blocky-query-grafana.json)
 or [at grafana.com](https://grafana.com/grafana/dashboards/14980)
 
 ![grafana-dashboard](grafana-query-dashboard.png).
@@ -54,6 +54,6 @@ Please define the MySQL source in Grafana, which points to the database with blo
 
 ## Postgres
 
-The JSON for a Grafana dashboard equivalent to the MySQL/MariaDB version is located [here](https://github.com/0xERR0R/blocky/blob/main/docs/blocky-query-grafana-postgres.json)
+The JSON for a Grafana dashboard equivalent to the MySQL/MariaDB version is located [here](blocky-query-grafana-postgres.json)
 
 --8<-- "docs/includes/abbreviations.md"

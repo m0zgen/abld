@@ -2,16 +2,19 @@ name: Makefile
 
 on:
   push:
+    paths:
+      - .github/workflows/makefile.yml
+      - Dockerfile
+      - Makefile
+      - "**.go"
+      - "go.*"
+      - "helpertest/data/**"
   pull_request:
 
 permissions:
   security-events: write
   actions: read
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   GINKGO_PROCS: --procs=1
@@ -55,6 +58,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Download dependencies
+        run: go mod download
+        if: matrix.go == true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         if: matrix.docker == true
@@ -66,7 +73,7 @@ jobs:
           GO_SKIP_GENERATE: 1
 
       - name: Upload results to codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         if: matrix.make == 'test' && github.repository_owner == '0xERR0R'
 
       - name: Check GoReleaser configuration

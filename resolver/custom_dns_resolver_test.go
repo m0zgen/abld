@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"time"
 
@@ -17,7 +18,8 @@ import (
 
 var _ = Describe("CustomDNSResolver", func() {
 	var (
-		TTL = uint32(time.Now().Second())
+		TTL     = uint32(time.Now().Second())
+		zoneTTL = uint32(time.Now().Second() * 2)
 
 		sut *CustomDNSResolver
 		m   *mockResolver
@@ -37,16 +39,28 @@ var _ = Describe("CustomDNSResolver", func() {
 		ctx, cancelFn = context.WithCancel(context.Background())
 		DeferCleanup(cancelFn)
 
+		zoneHdr := dns.RR_Header{Ttl: zoneTTL}
+
 		cfg = config.CustomDNS{
-			Mapping: config.CustomDNSMapping{HostIPs: map[string][]net.IP{
-				"custom.domain": {net.ParseIP("192.168.143.123")},
-				"ip6.domain":    {net.ParseIP("2001:0db8:85a3:0000:0000:8a2e:0370:7334")},
+			Mapping: config.CustomDNSMapping{
+				"custom.domain": {&dns.A{A: net.ParseIP("192.168.143.123")}},
+				"ip6.domain":    {&dns.AAAA{AAAA: net.ParseIP("2001:0db8:85a3:0000:0000:8a2e:0370:7334")}},
 				"multiple.ips": {
-					net.ParseIP("192.168.143.123"),
-					net.ParseIP("192.168.143.125"),
-					net.ParseIP("2001:0db8:85a3:0000:0000:8a2e:0370:7334"),
+					&dns.A{A: net.ParseIP("192.168.143.123")},
+					&dns.A{A: net.ParseIP("192.168.143.125")},
+					&dns.AAAA{AAAA: net.ParseIP("2001:0db8:85a3:0000:0000:8a2e:0370:7334")},
 				},
-			}},
+			},
+			Zone: config.ZoneFileDNS{
+				RRs: config.CustomDNSMapping{
+					"example.zone.":    {&dns.A{A: net.ParseIP("1.2.3.4"), Hdr: zoneHdr}},
+					"cname.domain.":    {&dns.CNAME{Target: "custom.domain", Hdr: zoneHdr}},
+					"cname.ip6.":       {&dns.CNAME{Target: "ip6.domain", Hdr: zoneHdr}},
+					"cname.example.":   {&dns.CNAME{Target: "example.com", Hdr: zoneHdr}},
+					"cname.recursive.": {&dns.CNAME{Target: "cname.recursive", Hdr: zoneHdr}},
+					"mx.domain.":       {&dns.MX{Mx: "mx.domain", Hdr: zoneHdr}},
+				},
+			},
 			CustomTTL:           config.Duration(time.Duration(TTL) * time.Second),
 			FilterUnmappedTypes: true,
 		}
@@ -76,9 +90,73 @@ var _ = Describe("CustomDNSResolver", func() {
 	})
 
 	Describe("Resolving custom name via CustomDNSResolver", func() {
+		When("The parent context has an error ", func() {
+			It("should return the error", func() {
+				cancelledCtx, cancel := context.WithCancel(context.Background())
+				cancel()
+
+				_, err := sut.Resolve(cancelledCtx, newRequest("custom.domain.", A))
+
+				Expect(err).Should(HaveOccurred())
+				Expect(err.Error()).Should(ContainSubstring("context canceled"))
+			})
+		})
+		When("Creating the IP response returns an error ", func() {
+			It("should return the error", func() {
+				createAnswerMock := func(_ dns.Question, _ net.IP, _ uint32) (dns.RR, error) {
+					return nil, fmt.Errorf("create answer error")
+				}
+
+				sut.CreateAnswerFromQuestion(createAnswerMock)
+
+				_, err := sut.Resolve(ctx, newRequest("custom.domain.", A))
+
+				Expect(err).Should(HaveOccurred())
+				Expect(err.Error()).Should(ContainSubstring("create answer error"))
+			})
+		})
+		When("The forward request returns an error ", func() {
+			It("should return the error if the error occurs when checking ipv4 forward addresses", func() {
+				err := fmt.Errorf("forward error")
+				m = &mockResolver{}
+
+				m.On("Resolve", mock.Anything).Return(nil, err)
+
+				sut.Next(m)
+				_, err = sut.Resolve(ctx, newRequest("cname.example.", A))
+
+				Expect(err).Should(HaveOccurred())
+				Expect(err.Error()).Should(ContainSubstring("forward error"))
+			})
+			It("should return the error if the error occurs when checking ipv6 forward addresses", func() {
+				err := fmt.Errorf("forward error")
+				m = &mockResolver{}
+
+				m.On("Resolve", mock.Anything).Return(nil, err)
+
+				sut.Next(m)
+				_, err = sut.Resolve(ctx, newRequest("cname.example.", AAAA))
+
+				Expect(err).Should(HaveOccurred())
+				Expect(err.Error()).Should(ContainSubstring("forward error"))
+			})
+		})
 		When("Ip 4 mapping is defined for custom domain and", func() {
 			Context("filterUnmappedTypes is true", func() {
 				BeforeEach(func() { cfg.FilterUnmappedTypes = true })
+				It("defined ip4 query should be resolved from zone mappings and should use the TTL defined in the zone", func() {
+					Expect(sut.Resolve(ctx, newRequest("example.zone.", A))).
+						Should(
+							SatisfyAll(
+								BeDNSRecord("example.zone.", A, "1.2.3.4"),
+								HaveTTL(BeNumerically("==", zoneTTL)),
+								HaveResponseType(ResponseTypeCUSTOMDNS),
+								HaveReason("CUSTOM DNS"),
+								HaveReturnCode(dns.RcodeSuccess),
+							))
+					// will not delegate to next resolver
+					m.AssertNotCalled(GinkgoT(), "Resolve", mock.Anything)
+				})
 				It("defined ip4 query should be resolved", func() {
 					Expect(sut.Resolve(ctx, newRequest("custom.domain.", A))).
 						Should(
@@ -208,6 +286,101 @@ var _ = Describe("CustomDNSResolver", func() {
 
 					// will not delegate to next resolver
 					m.AssertNotCalled(GinkgoT(), "Resolve", mock.Anything)
+				})
+			})
+		})
+		When("A CNAME record is defined for custom domain ", func() {
+			It("should not recurse if the request is strictly a CNAME request", func() {
+				By("CNAME query", func() {
+					Expect(sut.Resolve(ctx, newRequest("cname.domain", CNAME))).
+						Should(
+							SatisfyAll(
+								WithTransform(ToAnswer, SatisfyAll(
+									HaveLen(1),
+									ContainElements(
+										BeDNSRecord("cname.domain.", CNAME, "custom.domain.")),
+								)),
+								HaveResponseType(ResponseTypeCUSTOMDNS),
+								HaveReason("CUSTOM DNS"),
+								HaveReturnCode(dns.RcodeSuccess),
+							))
+
+					// will not delegate to next resolver
+					m.AssertNotCalled(GinkgoT(), "Resolve", mock.Anything)
+				})
+			})
+			It("all CNAMES for the current type should be recursively resolved when relying on other Mappings", func() {
+				By("A query", func() {
+					Expect(sut.Resolve(ctx, newRequest("cname.domain", A))).
+						Should(
+							SatisfyAll(
+								WithTransform(ToAnswer, SatisfyAll(
+									HaveLen(2),
+									ContainElements(
+										BeDNSRecord("cname.domain.", CNAME, "custom.domain."),
+										BeDNSRecord("custom.domain.", A, "192.168.143.123")),
+								)),
+								HaveResponseType(ResponseTypeCUSTOMDNS),
+								HaveReason("CUSTOM DNS"),
+								HaveReturnCode(dns.RcodeSuccess),
+							))
+
+					// will not delegate to next resolver
+					m.AssertNotCalled(GinkgoT(), "Resolve", mock.Anything)
+				})
+				By("AAAA query", func() {
+					Expect(sut.Resolve(ctx, newRequest("cname.ip6", AAAA))).
+						Should(
+							SatisfyAll(
+								WithTransform(ToAnswer, SatisfyAll(
+									HaveLen(2),
+									ContainElements(
+										BeDNSRecord("cname.ip6.", CNAME, "ip6.domain."),
+										BeDNSRecord("ip6.domain.", AAAA, "2001:db8:85a3::8a2e:370:7334")),
+								)),
+								HaveResponseType(ResponseTypeCUSTOMDNS),
+								HaveReason("CUSTOM DNS"),
+								HaveReturnCode(dns.RcodeSuccess),
+							))
+
+					// will not delegate to next resolver
+					m.AssertNotCalled(GinkgoT(), "Resolve", mock.Anything)
+				})
+			})
+			It("should return an error when the CNAME is recursive", func() {
+				By("CNAME query", func() {
+					_, err := sut.Resolve(ctx, newRequest("cname.recursive", A))
+					Expect(err).Should(HaveOccurred())
+					Expect(err.Error()).Should(ContainSubstring("CNAME loop detected:"))
+					// will not delegate to next resolver
+					m.AssertNotCalled(GinkgoT(), "Resolve", mock.Anything)
+				})
+			})
+			It("all CNAMES for the current type should be returned when relying on public DNS", func() {
+				By("CNAME query", func() {
+					Expect(sut.Resolve(ctx, newRequest("cname.example", A))).
+						Should(
+							SatisfyAll(
+								WithTransform(ToAnswer, SatisfyAll(
+									ContainElements(
+										BeDNSRecord("cname.example.", CNAME, "example.com.")),
+								)),
+								HaveResponseType(ResponseTypeCUSTOMDNS),
+								HaveReason("CUSTOM DNS"),
+								HaveReturnCode(dns.RcodeSuccess),
+							))
+
+					// will delegate to next resolver
+					m.AssertCalled(GinkgoT(), "Resolve", mock.Anything)
+				})
+			})
+		})
+		When("An unsupported DNS query type is queried from the resolver but found in the config mapping ", func() {
+			It("an error should be returned", func() {
+				By("MX query", func() {
+					_, err := sut.Resolve(ctx, newRequest("mx.domain", MX))
+					Expect(err).Should(HaveOccurred())
+					Expect(err.Error()).Should(ContainSubstring("unsupported customDNS RR type *dns.MX"))
 				})
 			})
 		})

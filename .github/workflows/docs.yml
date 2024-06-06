@@ -2,10 +2,15 @@ name: docs
 
 on:
   push:
-    branches:
-      - "**"
     tags:
       - v*
+
+    branches:
+      - '**'
+    paths:
+      - .github/workflows/**
+      - mkdocs.yml
+      - docs/**
 
 concurrency:
   group: ${{ github.workflow }}

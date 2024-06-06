@@ -15,17 +15,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func newRequest(question string, rType dns.Type, logger ...*logrus.Entry) *model.Request {
-	var loggerEntry *logrus.Entry
-	if len(logger) == 1 {
-		loggerEntry = logger[0]
-	} else {
-		loggerEntry = logrus.NewEntry(log.Log())
-	}
-
+func newRequest(question string, rType dns.Type) *model.Request {
 	return &model.Request{
 		Req:      util.NewMsgWithQuestion(question, rType),
-		Log:      loggerEntry,
 		Protocol: model.RequestProtocolUDP,
 	}
 }
@@ -35,7 +27,6 @@ func newRequestWithClient(question string, rType dns.Type, ip string, clientName
 		ClientIP:    net.ParseIP(ip),
 		ClientNames: clientNames,
 		Req:         util.NewMsgWithQuestion(question, rType),
-		Log:         logrus.NewEntry(log.Log()),
 		RequestTS:   time.Time{},
 		Protocol:    model.RequestProtocolUDP,
 	}
@@ -59,7 +50,6 @@ func newRequestWithClientID(question string, rType dns.Type, ip, requestClientID
 		ClientIP:        net.ParseIP(ip),
 		RequestClientID: requestClientID,
 		Req:             util.NewMsgWithQuestion(question, rType),
-		Log:             logrus.NewEntry(log.Log()),
 		RequestTS:       time.Time{},
 		Protocol:        model.RequestProtocolUDP,
 	}
@@ -68,6 +58,7 @@ func newRequestWithClientID(question string, rType dns.Type, ip, requestClientID
 // Resolver generic interface for all resolvers
 type Resolver interface {
 	config.Configurable
+	fmt.Stringer
 
 	// Type returns a short, user-friendly, name for the resolver.
 	//
@@ -193,8 +184,27 @@ func (t *typed) Type() string {
 	return t.typeName
 }
 
-func (t *typed) log() *logrus.Entry {
-	return log.PrefixedLog(t.Type())
+// String implements `fmt.Stringer`.
+func (t *typed) String() string {
+	return t.Type()
+}
+
+func (t *typed) log(ctx context.Context) (context.Context, *logrus.Entry) {
+	return t.logWith(ctx, func(logger *logrus.Entry) *logrus.Entry { return logger })
+}
+
+func (t *typed) logWithFields(ctx context.Context, fields logrus.Fields) (context.Context, *logrus.Entry) {
+	return t.logWith(ctx, func(logger *logrus.Entry) *logrus.Entry {
+		return logger.WithFields(fields)
+	})
+}
+
+func (t *typed) logWith(ctx context.Context, wrap func(*logrus.Entry) *logrus.Entry) (context.Context, *logrus.Entry) {
+	return log.WrapCtx(ctx, func(logger *logrus.Entry) *logrus.Entry {
+		logger = log.WithPrefix(logger, t.Type())
+
+		return wrap(logger)
+	})
 }
 
 // Should be embedded in a Resolver to auto-implement `config.Configurable`.
@@ -217,7 +227,7 @@ func (c *configurable[T]) LogConfig(logger *logrus.Entry) {
 }
 
 type initializable interface {
-	log() *logrus.Entry
+	log(context.Context) (context.Context, *logrus.Entry)
 	setResolvers([]*upstreamResolverStatus)
 }
 
@@ -236,7 +246,9 @@ func initGroupResolvers[T initializable](
 	}
 
 	onErr := func(err error) {
-		r.log().WithError(err).Error("upstream verification error, will continue to use bootstrap DNS")
+		_, logger := r.log(ctx)
+
+		logger.WithError(err).Error("upstream verification error, will continue to use bootstrap DNS")
 	}
 
 	err := cfg.Init.Strategy.Do(ctx, init, onErr)
