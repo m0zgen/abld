@@ -1,6 +1,6 @@
 # Bootstrap Listener Daemon (BLD)
 
-* [OpenBLD.net](https://openbld.net) project [used](https://openbld.net/docs/overwiew/how-it-works/#project-chronology) aBLD in project service.
+* [OpenBLD.net](https://openbld.net) project [used](https://openbld.net/docs/overwiew/how-it-works/#project-chronology) aBLD in project service till to 2023 y.
 * Based on[Blocky](https://github.com/0xERR0R/blocky).
 
 ## How OpenBLD.net works
