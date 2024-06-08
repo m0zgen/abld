@@ -1,7 +1,7 @@
-# Blocky - Backend Listener Daemon (BLD)
+# Bootstrap Listener Daemon (BLD)
 
-* [OpenBLD.net](https://openbld.net) DNS project uses BLD as backend DNS server.
-* BLD based on [Blocky](https://github.com/0xERR0R/blocky).
+* [OpenBLD.net](https://openbld.net) DNS project uses BLD as Bootstrap DNS server.
+* Forked from[Blocky](https://github.com/0xERR0R/blocky).
 
 ## How OpenBLD.net works
 
@@ -61,5 +61,4 @@ You can inform me about of accidents blocked / unblocked domains through [DNS-HO
 * https://github.com/m0zgen/bld-agregator
 * https://github.com/m0zgen/ip2drop
 * https://github.com/m0zgen/cactusd
-* https://github.com/m0zgen/zdns
 * https://lab.sys-adm.in
