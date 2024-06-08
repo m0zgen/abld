@@ -1,4 +1,4 @@
-# Block List Domain Daemon (BLD)
+# Blocky Listener Daemon (BLD)
 
 * Based on[Blocky](https://github.com/0xERR0R/blocky).
 * [OpenBLD.net](https://openbld.net) project [used](https://openbld.net/docs/overwiew/how-it-works/#project-chronology) BLD in project till to 2023 y with codename: _abld_.
