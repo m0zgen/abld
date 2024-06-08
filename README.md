@@ -1,7 +1,7 @@
 # Additional Blocky Listener Daemon (aBLD)
 
 * Based on[Blocky](https://github.com/0xERR0R/blocky).
-* [OpenBLD.net](https://openbld.net) project [used](https://openbld.net/docs/overwiew/how-it-works/#project-chronology) aBLD in project till to 2023y. (with codename: _abld_).
+* Sys-Adm.in BLD (deprecated) project [used](https://openbld.net/docs/overwiew/how-it-works/#project-chronology) aBLD in project till to 2023y. (with codename: _abld_).
 
 ## Quick start
 
