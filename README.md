@@ -1,7 +1,7 @@
 # Bootstrap Listener Daemon (BLD)
 
-* [OpenBLD.net](https://openbld.net) project used BLD as Bootstrap project service.
-* Based from[Blocky](https://github.com/0xERR0R/blocky).
+* [OpenBLD.net](https://openbld.net) project used aBLD as Bootstrap project service.
+* Based on[Blocky](https://github.com/0xERR0R/blocky).
 
 ## How OpenBLD.net works
 
